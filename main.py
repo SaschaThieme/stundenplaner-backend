@@ -9,8 +9,9 @@ app = FastAPI(title="StundenPlaner API")
 # CORS – erlaubt Anfragen vom Frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In Produktion: nur deine Frontend-URL
-    allow_methods=["POST"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
