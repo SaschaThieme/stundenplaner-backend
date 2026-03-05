@@ -1,0 +1,2 @@
+# stundenplaner-backend
+StundenPlaner API
