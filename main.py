@@ -36,7 +36,9 @@ async def generate_class(request: Request):
     teachers = req.get("teachers", [])
     existing = req.get("existing_schedule", [])
     locked   = req.get("locked_entries", [])
-    hours    = req.get("hours", HOURS)  # Use custom hours from frontend if provided
+    hours         = req.get("hours", HOURS)
+    max_per_day   = req.get("max_per_day", {})
+    block_subjects= req.get("block_subjects", True)
 
     # Belegte Lehrer-Slots
     occupied = [str(e.get("teacher","")) + "|" + str(e.get("day","")) + "|" + str(e.get("time","")) for e in existing]
@@ -47,7 +49,10 @@ async def generate_class(request: Request):
     lck_info = ("\nGESPERRTE EINTRÄGE: " + json.dumps(lck, ensure_ascii=False)) if lck else ""
 
     # Lehrkräfte vereinfachen
-    teacher_list = [{"name": t.get("name",""), "subjects": t.get("subjects",[])} for t in teachers]
+    cls_name_str = cls.get("name","")
+    cls_grade = int(''.join(filter(str.isdigit, cls_name_str))[:2] or 0) if any(c.isdigit() for c in cls_name_str) else 0
+    filtered_teachers = [t for t in teachers if not t.get("grades") or not cls_grade or cls_grade in t.get("grades",[])]
+    teacher_list = [{"name": t.get("name",""), "subjects": t.get("subjects",[])} for t in filtered_teachers]
 
     cls_name = cls.get("name", "?")
 
@@ -65,7 +70,10 @@ async def generate_class(request: Request):
         "3. Lehrkraft unterrichtet nur ihre Faecher\n"
         "4. Stundenzahlen exakt wie im curriculum\n"
         "5. Kernfaecher (Mathe,Deutsch) moeglichst in Stunden 1-5\n"
-        "6. Gleichmaessige Verteilung ueber die Woche\n\n"
+        "6. Gleichmaessige Verteilung ueber die Woche\n"
+        "7. BLOCKBILDUNG PFLICHT: Wenn ein Fach an einem Tag mehrfach vorkommt, muessen die Stunden direkt aufeinanderfolgend sein (kein Split auf Morgen/Mittag)\n"
+        + (("8. MAX STUNDEN PRO TAG: " + json.dumps(max_per_day, ensure_ascii=False) + "\n") if max_per_day else "")
+        + "\n"
         "AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.\n"
         '[{"day":"Montag","time":"07:45","class":"' + cls_name + '","subject":"Mathematik","teacher":"Fr. Mueller"}]'
     )
