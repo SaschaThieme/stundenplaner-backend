@@ -5,7 +5,26 @@ import httpx, os, json, re
 from typing import Optional
 
 app = FastAPI(title="StundenPlaner API")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+@app.middleware("http")
+async def add_cors(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    return response
+
+@app.options("/{rest_of_path:path}")
+async def preflight(rest_of_path: str):
+    from fastapi.responses import Response
+    r = Response()
+    r.headers["Access-Control-Allow-Origin"] = "*"
+    r.headers["Access-Control-Allow-Methods"] = "POST, GET, OPTIONS"
+    r.headers["Access-Control-Allow-Headers"] = "*"
+    return r
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 DAYS  = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag"]
