@@ -37,8 +37,9 @@ async def generate_class(request: Request):
     existing = req.get("existing_schedule", [])
     locked   = req.get("locked_entries", [])
     hours         = req.get("hours", HOURS)
-    max_per_day   = req.get("max_per_day", {})
-    block_subjects= req.get("block_subjects", True)
+    max_per_day      = req.get("max_per_day", {})
+    block_subjects   = req.get("block_subjects", True)
+    no_free_periods  = req.get("no_free_periods", True)
 
     # Belegte Lehrer-Slots
     occupied = [str(e.get("teacher","")) + "|" + str(e.get("day","")) + "|" + str(e.get("time","")) for e in existing]
@@ -71,7 +72,8 @@ async def generate_class(request: Request):
         "4. Stundenzahlen exakt wie im curriculum\n"
         "5. Kernfaecher (Mathe,Deutsch) moeglichst in Stunden 1-5\n"
         "6. Gleichmaessige Verteilung ueber die Woche\n"
-        "7. BLOCKBILDUNG PFLICHT: Wenn ein Fach an einem Tag mehrfach vorkommt, muessen die Stunden direkt aufeinanderfolgend sein (kein Split auf Morgen/Mittag)\n"
+        "7. BLOCKBILDUNG PFLICHT: Mehrere Stunden desselben Fachs an einem Tag muessen direkt aufeinanderfolgend sein\n"
+        "8. KEINE FREISTUNDEN: Der Stundenplan einer Klasse darf keine Luecken haben - Stunden muessen zusammenhaengend sein\n"
         + (("8. MAX STUNDEN PRO TAG: " + json.dumps(max_per_day, ensure_ascii=False) + "\n") if max_per_day else "")
         + "\n"
         "AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.\n"
