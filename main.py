@@ -96,7 +96,7 @@ async def generate_class(request: Request):
                 },
                 json={
                     "model": "claude-sonnet-4-6",
-                    "max_tokens": 4096,
+                    "max_tokens": 8192,
                     "messages": [{"role": "user", "content": prompt}]
                 }
             )
@@ -110,15 +110,40 @@ async def generate_class(request: Request):
     text  = "".join(b.get("text","") for b in data.get("content",[]))
     clean = text.replace("```json","").replace("```","").strip()
 
+    # Try to parse JSON - with fallback for truncated responses
+    entries = None
+    # Try 1: direct parse
     try:
         entries = json.loads(clean)
-        return cors({"entries": entries, "count": len(entries)})
     except:
+        pass
+    # Try 2: extract array with regex
+    if entries is None:
         match = re.search(r'\[[\s\S]*\]', clean)
         if match:
             try:
                 entries = json.loads(match.group())
-                return cors({"entries": entries, "count": len(entries)})
             except:
                 pass
-        return cors({"detail": "JSON-Parse fehlgeschlagen: " + clean[:200]}, 500)
+    # Try 3: recover truncated JSON - find last complete object
+    if entries is None:
+        match = re.search(r'\[[\s\S]*\}', clean)
+        if match:
+            partial = match.group()
+            # Count open/close braces to find last complete entry
+            depth = 0
+            last_complete = 0
+            for i, ch in enumerate(partial):
+                if ch == '{': depth += 1
+                elif ch == '}':
+                    depth -= 1
+                    if depth == 0:
+                        last_complete = i + 1
+            if last_complete > 0:
+                try:
+                    entries = json.loads(partial[:last_complete] + ']')
+                except:
+                    pass
+    if entries is not None:
+        return cors({"entries": entries, "count": len(entries), "truncated": len(entries) < 5})
+    return cors({"detail": "JSON-Parse fehlgeschlagen: " + clean[:300]}, 500)
