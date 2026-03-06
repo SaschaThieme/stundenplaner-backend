@@ -1,20 +1,11 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import httpx
-import os
-import json
-import re
+import httpx, os, json, re
+from typing import Optional
 
 app = FastAPI(title="StundenPlaner API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 DAYS  = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag"]
@@ -25,21 +16,31 @@ class GenerateRequest(BaseModel):
     classes: list
     locked_entries: list = []
 
+class GenerateClassRequest(BaseModel):
+    cls: dict
+    teachers: list
+    existing_schedule: list = []
+    locked_entries: list = []
+
 @app.get("/")
 def health():
     return {"status": "ok", "service": "StundenPlaner API"}
 
-async def generate_for_class(client, cls, teachers, existing_schedule, locked_entries):
-    occupied = [f"{e['teacher']}|{e['day']}|{e['time']}" for e in existing_schedule]
+@app.post("/api/generate-class")
+async def generate_class(req: GenerateClassRequest):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=500, detail="API Key nicht konfiguriert")
+
+    occupied = [f"{e['teacher']}|{e['day']}|{e['time']}" for e in req.existing_schedule]
     occupied_info = f"\nBEREITS BELEGTE LEHRER-SLOTS (nicht verwenden):\n{json.dumps(occupied, ensure_ascii=False)}" if occupied else ""
-    locked_for_class = [e for e in locked_entries if e.get("class") == cls["name"]]
-    locked_info = f"\nGESPERRTE EINTRÄGE: {json.dumps(locked_for_class, ensure_ascii=False)}" if locked_for_class else ""
+    locked = [e for e in req.locked_entries if e.get("class") == req.cls.get("name")]
+    locked_info = f"\nGESPERRTE EINTRÄGE: {json.dumps(locked, ensure_ascii=False)}" if locked else ""
 
     prompt = f"""Du bist ein Stundenplan-Solver für eine deutsche Schule (Sek I).
-Erstelle den Stundenplan NUR für Klasse {cls["name"]}.
+Erstelle den Stundenplan NUR für Klasse {req.cls["name"]}.
 
-KLASSE: {json.dumps(cls, ensure_ascii=False)}
-LEHRKRÄFTE: {json.dumps([{{"name":t["name"],"subjects":t["subjects"]}} for t in teachers], ensure_ascii=False)}
+KLASSE: {json.dumps(req.cls, ensure_ascii=False)}
+LEHRKRÄFTE: {json.dumps([{{"name":t["name"],"subjects":t["subjects"]}} for t in req.teachers], ensure_ascii=False)}
 TAGE: {json.dumps(DAYS, ensure_ascii=False)}
 ZEITSLOTS: {json.dumps(HOURS, ensure_ascii=False)}{occupied_info}{locked_info}
 
@@ -52,39 +53,34 @@ Regeln:
 6. Gleichmäßige Verteilung über die Woche
 
 AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.
-[{{"day":"Montag","time":"07:45","class":"{cls["name"]}","subject":"Mathematik","teacher":"Fr. Müller"}}]"""
+[{{"day":"Montag","time":"07:45","class":"{req.cls["name"]}","subject":"Mathematik","teacher":"Fr. Müller"}}]"""
 
-    response = await client.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        json={"model": "claude-sonnet-4-6", "max_tokens": 4096, "messages": [{"role": "user", "content": prompt}]}
-    )
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
+            json={"model": "claude-sonnet-4-6", "max_tokens": 4096, "messages": [{"role": "user", "content": prompt}]}
+        )
 
     if response.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Anthropic Fehler für Klasse {cls['name']}: {response.text}")
+        raise HTTPException(status_code=502, detail=f"Anthropic Fehler: {response.text[:200]}")
 
     data = response.json()
     text = "".join(b.get("text","") for b in data.get("content",[]))
     clean = text.replace("```json","").replace("```","").strip()
 
     try:
-        return json.loads(clean)
+        entries = json.loads(clean)
     except:
         match = re.search(r'\[[\s\S]*\]', clean)
         if match:
-            return json.loads(match.group())
-        raise HTTPException(status_code=500, detail=f"JSON-Parse fehlgeschlagen für {cls['name']}: {clean[:200]}")
+            entries = json.loads(match.group())
+        else:
+            raise HTTPException(status_code=500, detail=f"JSON-Parse fehlgeschlagen: {clean[:200]}")
 
+    return {"entries": entries, "count": len(entries)}
+
+# Legacy endpoint
 @app.post("/api/generate")
 async def generate_schedule(req: GenerateRequest):
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="API Key nicht konfiguriert")
-
-    all_entries = list(req.locked_entries)
-
-    async with httpx.AsyncClient(timeout=120) as client:
-        for cls in req.classes:
-            new_entries = await generate_for_class(client, cls, req.teachers, all_entries, req.locked_entries)
-            all_entries.extend(new_entries)
-
-    return {"schedule": all_entries, "count": len(all_entries)}
+    return {"error": "Bitte /api/generate-class verwenden"}, 400
