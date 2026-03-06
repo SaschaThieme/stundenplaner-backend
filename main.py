@@ -36,6 +36,7 @@ async def generate_class(request: Request):
     teachers = req.get("teachers", [])
     existing = req.get("existing_schedule", [])
     locked   = req.get("locked_entries", [])
+    hours    = req.get("hours", HOURS)  # Use custom hours from frontend if provided
 
     # Belegte Lehrer-Slots
     occupied = [str(e.get("teacher","")) + "|" + str(e.get("day","")) + "|" + str(e.get("time","")) for e in existing]
@@ -56,7 +57,7 @@ async def generate_class(request: Request):
         "KLASSE: " + json.dumps(cls, ensure_ascii=False) + "\n"
         "LEHRKRAEFTE: " + json.dumps(teacher_list, ensure_ascii=False) + "\n"
         "TAGE: " + json.dumps(DAYS, ensure_ascii=False) + "\n"
-        "ZEITSLOTS: " + json.dumps(HOURS, ensure_ascii=False) + "\n"
+        "ZEITSLOTS: " + json.dumps(hours, ensure_ascii=False) + "\n"
         + occ_info + lck_info + "\n\n"
         "Regeln:\n"
         "1. Lehrkraft nie doppelt im selben Tag/Zeit-Slot\n"
