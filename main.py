@@ -48,8 +48,11 @@ TAGE: {json.dumps(DAYS, ensure_ascii=False)}
 ZEITSLOTS: {json.dumps(HOURS, ensure_ascii=False)}
 {locked_section}
 
-Erstelle einen vollständigen Stundenplan. Antworte NUR mit JSON-Array:
-[{{"day":"Montag","time":"07:45","class":"5a","subject":"Mathematik","teacher":"Fr. Müller"}}]
+Erstelle einen vollständigen Stundenplan.
+WICHTIG: Antworte AUSSCHLIESSLICH mit dem rohen JSON-Array. 
+Kein Text davor, kein Text danach, keine Erklärungen, keine Markdown-Formatierung.
+Beginne deine Antwort direkt mit [ und ende mit ]
+Beispiel: [{"day":"Montag","time":"07:45","class":"5a","subject":"Mathematik","teacher":"Fr. Müller"}]
 
 Regeln:
 1. Lehrkraft nie doppelt im selben Slot
