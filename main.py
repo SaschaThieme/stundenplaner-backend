@@ -37,42 +37,58 @@ async def generate_class(request: Request):
     existing = req.get("existing_schedule", [])
     locked   = req.get("locked_entries", [])
 
-    occupied = [f"{e['teacher']}|{e['day']}|{e['time']}" for e in existing]
-    occ_info = f"\nBEREITS BELEGTE LEHRER-SLOTS (nicht verwenden):\n{json.dumps(occupied, ensure_ascii=False)}" if occupied else ""
-    lck      = [e for e in locked if e.get("class") == cls.get("name")]
-    lck_info = f"\nGESPERRTE EINTRÄGE: {json.dumps(lck, ensure_ascii=False)}" if lck else ""
+    # Belegte Lehrer-Slots
+    occupied = [str(e.get("teacher","")) + "|" + str(e.get("day","")) + "|" + str(e.get("time","")) for e in existing]
+    occ_info = ("\nBEREITS BELEGTE LEHRER-SLOTS (nicht verwenden):\n" + json.dumps(occupied, ensure_ascii=False)) if occupied else ""
 
-    prompt = f"""Du bist ein Stundenplan-Solver für eine deutsche Schule (Sek I).
-Erstelle den Stundenplan NUR für Klasse {cls.get("name","?")}.
+    # Gesperrte Einträge für diese Klasse
+    lck = [e for e in locked if e.get("class") == cls.get("name")]
+    lck_info = ("\nGESPERRTE EINTRÄGE: " + json.dumps(lck, ensure_ascii=False)) if lck else ""
 
-KLASSE: {json.dumps(cls, ensure_ascii=False)}
-LEHRKRÄFTE: {json.dumps([{{"name":t["name"],"subjects":t["subjects"]}} for t in teachers], ensure_ascii=False)}
-TAGE: {json.dumps(DAYS, ensure_ascii=False)}
-ZEITSLOTS: {json.dumps(HOURS, ensure_ascii=False)}{occ_info}{lck_info}
+    # Lehrkräfte vereinfachen
+    teacher_list = [{"name": t.get("name",""), "subjects": t.get("subjects",[])} for t in teachers]
 
-Regeln:
-1. Lehrkraft nie doppelt im selben Tag/Zeit-Slot
-2. Bereits belegte Slots NICHT verwenden
-3. Lehrkraft unterrichtet nur ihre Fächer
-4. Stundenzahlen exakt wie im curriculum
-5. Kernfächer (Mathe,Deutsch) möglichst in Stunden 1-5
-6. Gleichmäßige Verteilung über die Woche
+    cls_name = cls.get("name", "?")
 
-AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.
-[{{"day":"Montag","time":"07:45","class":"{cls.get("name","?")}","subject":"Mathematik","teacher":"Fr. Müller"}}]"""
+    prompt = (
+        "Du bist ein Stundenplan-Solver fuer eine deutsche Schule (Sek I).\n"
+        "Erstelle den Stundenplan NUR fuer Klasse " + cls_name + ".\n\n"
+        "KLASSE: " + json.dumps(cls, ensure_ascii=False) + "\n"
+        "LEHRKRAEFTE: " + json.dumps(teacher_list, ensure_ascii=False) + "\n"
+        "TAGE: " + json.dumps(DAYS, ensure_ascii=False) + "\n"
+        "ZEITSLOTS: " + json.dumps(HOURS, ensure_ascii=False) + "\n"
+        + occ_info + lck_info + "\n\n"
+        "Regeln:\n"
+        "1. Lehrkraft nie doppelt im selben Tag/Zeit-Slot\n"
+        "2. Bereits belegte Slots NICHT verwenden\n"
+        "3. Lehrkraft unterrichtet nur ihre Faecher\n"
+        "4. Stundenzahlen exakt wie im curriculum\n"
+        "5. Kernfaecher (Mathe,Deutsch) moeglichst in Stunden 1-5\n"
+        "6. Gleichmaessige Verteilung ueber die Woche\n\n"
+        "AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.\n"
+        '[{"day":"Montag","time":"07:45","class":"' + cls_name + '","subject":"Mathematik","teacher":"Fr. Mueller"}]'
+    )
 
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
-                headers={"x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-                json={"model": "claude-sonnet-4-6", "max_tokens": 4096, "messages": [{"role": "user", "content": prompt}]}
+                headers={
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json"
+                },
+                json={
+                    "model": "claude-sonnet-4-6",
+                    "max_tokens": 4096,
+                    "messages": [{"role": "user", "content": prompt}]
+                }
             )
     except Exception as e:
-        return cors({"detail": f"Netzwerkfehler: {str(e)}"}, 502)
+        return cors({"detail": "Netzwerkfehler: " + str(e)}, 502)
 
     if response.status_code != 200:
-        return cors({"detail": f"Anthropic Fehler: {response.text[:200]}"}, 502)
+        return cors({"detail": "Anthropic Fehler: " + response.text[:200]}, 502)
 
     data  = response.json()
     text  = "".join(b.get("text","") for b in data.get("content",[]))
@@ -80,14 +96,13 @@ AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.
 
     try:
         entries = json.loads(clean)
+        return cors({"entries": entries, "count": len(entries)})
     except:
         match = re.search(r'\[[\s\S]*\]', clean)
         if match:
             try:
                 entries = json.loads(match.group())
+                return cors({"entries": entries, "count": len(entries)})
             except:
-                return cors({"detail": f"JSON-Parse fehlgeschlagen: {clean[:200]}"}, 500)
-        else:
-            return cors({"detail": f"Kein JSON in Antwort: {clean[:200]}"}, 500)
-
-    return cors({"entries": entries, "count": len(entries)})
+                pass
+        return cors({"detail": "JSON-Parse fehlgeschlagen: " + clean[:200]}, 500)
