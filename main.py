@@ -79,6 +79,9 @@ async def generate_class(request: Request):
         + (("9. MAX STUNDEN PRO TAG pro Fach: " + json.dumps(max_per_day, ensure_ascii=False) + "\n") if max_per_day else "")
         + "\n"
         "AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.\n"
+        "WICHTIG: Alle Stunden laut Stundentafel MUESSEN im Plan erscheinen.\n"
+        "Falls kein passender Lehrer verfuegbar ist, verwende als teacher-Wert: \"kann nicht besetzt werden\"\n"
+        "NIEMALS eine Stunde weglassen - lieber unbesetzt als fehlend!\n"
         '[{"day":"Montag","time":"07:45","class":"' + cls_name + '","subject":"Mathematik","teacher":"Fr. Mueller"}]'
     )
 
