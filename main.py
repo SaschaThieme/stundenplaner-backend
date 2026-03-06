@@ -3,10 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import httpx
 import os
+import json
+import re
 
 app = FastAPI(title="StundenPlaner API")
 
-# CORS – erlaubt Anfragen vom Frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,23 +37,14 @@ async def generate_schedule(req: GenerateRequest):
 
     locked_section = ""
     if req.locked_entries:
-        import json
-        locked_section = f"GESPERRTE EINTRÄGE (unveränderlich): {json.dumps(req.locked_entries, ensure_ascii=False)}"
+        locked_section = f"\nGESPERRTE EINTRÄGE (unveränderlich übernehmen): {json.dumps(req.locked_entries, ensure_ascii=False)}"
 
-    import json
-    prompt = f"""Du bist ein Stundenplan-Solver (Sek I, Klassenverband).
+    prompt = f"""Du bist ein Stundenplan-Solver für eine deutsche Schule (Sek I, Klassenverband).
 
-LEHRKRÄFTE: {json.dumps([{"name":t["name"],"subjects":t["subjects"],"deputat":t["deputat"]} for t in req.teachers], ensure_ascii=False)}
+LEHRKRÄFTE: {json.dumps([{{"name":t["name"],"subjects":t["subjects"],"deputat":t["deputat"]}} for t in req.teachers], ensure_ascii=False)}
 KLASSEN: {json.dumps(req.classes, ensure_ascii=False)}
 TAGE: {json.dumps(DAYS, ensure_ascii=False)}
-ZEITSLOTS: {json.dumps(HOURS, ensure_ascii=False)}
-{locked_section}
-
-Erstelle einen vollständigen Stundenplan.
-WICHTIG: Antworte AUSSCHLIESSLICH mit dem rohen JSON-Array. 
-Kein Text davor, kein Text danach, keine Erklärungen, keine Markdown-Formatierung.
-Beginne deine Antwort direkt mit [ und ende mit ]
-Beispiel: [{"day":"Montag","time":"07:45","class":"5a","subject":"Mathematik","teacher":"Fr. Müller"}]
+ZEITSLOTS: {json.dumps(HOURS, ensure_ascii=False)}{locked_section}
 
 Regeln:
 1. Lehrkraft nie doppelt im selben Slot
@@ -61,7 +53,13 @@ Regeln:
 4. Stundenzahlen exakt wie im curriculum
 5. Gesperrte Einträge unverändert übernehmen
 6. Kernfächer (Mathe,Deutsch) möglichst nicht Std 7-8
-7. Gleichmäßige Verteilung über die Woche"""
+7. Gleichmäßige Verteilung über die Woche
+
+AUSGABE: Antworte AUSSCHLIESSLICH mit einem rohen JSON-Array.
+Kein Text davor oder danach. Keine Erklärungen. Kein Markdown.
+Beginne sofort mit [ und ende mit ]
+
+[{{"day":"Montag","time":"07:45","class":"5a","subject":"Mathematik","teacher":"Fr. Müller"}}]"""
 
     async with httpx.AsyncClient(timeout=120) as client:
         response = await client.post(
@@ -73,7 +71,7 @@ Regeln:
             },
             json={
                 "model": "claude-sonnet-4-6",
-                "max_tokens": 4096,
+                "max_tokens": 8096,
                 "messages": [{"role": "user", "content": prompt}]
             }
         )
@@ -85,14 +83,16 @@ Regeln:
     text = "".join(b.get("text","") for b in data.get("content",[]))
     clean = text.replace("```json","").replace("```","").strip()
 
-    import re
     try:
         schedule = json.loads(clean)
     except:
         match = re.search(r'\[[\s\S]*\]', clean)
         if match:
-            schedule = json.loads(match.group())
+            try:
+                schedule = json.loads(match.group())
+            except:
+                raise HTTPException(status_code=500, detail=f"JSON-Parse fehlgeschlagen. Antwort: {clean[:300]}")
         else:
-            raise HTTPException(status_code=500, detail=f"JSON-Parse fehlgeschlagen. Antwort war: {clean[:200]}")
-            
+            raise HTTPException(status_code=500, detail=f"Kein JSON gefunden. Antwort: {clean[:300]}")
+
     return {"schedule": schedule, "count": len(schedule)}
