@@ -71,7 +71,7 @@ Beginne sofort mit [ und ende mit ]
             },
             json={
                 "model": "claude-sonnet-4-6",
-                "max_tokens": 8096,
+                "max_tokens": 16000,
                 "messages": [{"role": "user", "content": prompt}]
             }
         )
