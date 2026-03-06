@@ -40,6 +40,7 @@ async def generate_class(request: Request):
     max_per_day      = req.get("max_per_day", {})
     block_subjects   = req.get("block_subjects", True)
     no_free_periods  = req.get("no_free_periods", True)
+    start_hour       = req.get("start_hour", 1)
 
     # Belegte Lehrer-Slots
     occupied = [str(e.get("teacher","")) + "|" + str(e.get("day","")) + "|" + str(e.get("time","")) for e in existing]
@@ -76,6 +77,7 @@ async def generate_class(request: Request):
         "6. BLOCKBILDUNG: Wenn ein Fach an einem Tag mehrfach vorkommt, Stunden direkt nacheinander planen\n"
         "7. Kernfaecher (Mathe,Deutsch) moeglichst in den ersten 5 Stunden\n"
         "8. Gleichmaessige Verteilung ueber die Woche\n"
+        + (f"9. UNTERRICHTSBEGINN: Fuer diese Klasse beginnt der Unterricht erst ab der {start_hour}. Stunde des Tages (nicht frueher!)\n" if start_hour > 1 else "")
         + (("9. MAX STUNDEN PRO TAG pro Fach: " + json.dumps(max_per_day, ensure_ascii=False) + "\n") if max_per_day else "")
         + "\n"
         "AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.\n"
