@@ -90,6 +90,6 @@ Regeln:
         if match:
             schedule = json.loads(match.group())
         else:
-            raise HTTPException(status_code=500, detail="JSON-Parse fehlgeschlagen")
-
+            raise HTTPException(status_code=500, detail=f"JSON-Parse fehlgeschlagen. Antwort war: {clean[:200]}")
+            
     return {"schedule": schedule, "count": len(schedule)}
