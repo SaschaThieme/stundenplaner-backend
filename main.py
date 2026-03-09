@@ -131,9 +131,15 @@ def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days
             if ok:
                 for i, (subj, tch) in enumerate(block):
                     slot = hours[start_idx + cur + i]
-                    day_schedule[day].append((subj, tch))
+                    # Hard deputat cap at slot level
+                    final_teacher = tch
                     if tch != "kann nicht besetzt werden":
-                        occupied.add(f"{tch}|{day}|{slot}")
+                        used = sum(1 for k in occupied if k.startswith(f"{tch}|"))
+                        if used >= teacher_deputat.get(tch, 999):
+                            final_teacher = "kann nicht besetzt werden"
+                        else:
+                            occupied.add(f"{tch}|{day}|{slot}")
+                    day_schedule[day].append((subj, final_teacher))
                 placed = True
                 break
 
