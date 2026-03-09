@@ -24,6 +24,39 @@ async def options(path: str):
 async def health():
     return cors({"status": "ok", "service": "StundenPlaner API"})
 
+
+def compact_schedule(entries, hours, start_hour):
+    """
+    Post-processing: for each class+day, remove all gaps.
+    Shifts entries to start at start_hour and be consecutive (no free periods).
+    """
+    from collections import defaultdict
+    
+    # Group by class+day
+    groups = defaultdict(list)
+    for e in entries:
+        key = (e.get("class",""), e.get("day",""))
+        groups[key].append(e)
+    
+    result = []
+    for (cls, day), day_entries in groups.items():
+        # Sort by time slot index
+        def slot_idx(e):
+            t = e.get("time","")
+            return hours.index(t) if t in hours else 999
+        
+        day_entries.sort(key=slot_idx)
+        
+        # Re-assign to consecutive slots starting from start_hour (0-indexed: start_hour-1)
+        start_idx = max(0, start_hour - 1)
+        for i, entry in enumerate(day_entries):
+            slot = start_idx + i
+            if slot < len(hours):
+                entry = {**entry, "time": hours[slot]}
+            result.append(entry)
+    
+    return result
+
 def post_process(entries, existing_schedule, teachers, cls_name):
     """
     Fix teacher collisions AFTER Claude generates the plan:
@@ -196,7 +229,9 @@ async def generate_class(request: Request):
     if entries is None:
         return cors({"detail": f"JSON-Parse fehlgeschlagen: {clean[:300]}"}, 500)
 
-    # POST-PROCESS: fix any remaining collisions deterministically
+    # POST-PROCESS 1: compact schedule (remove gaps, enforce start_hour)
+    entries = compact_schedule(entries, hours, start_hour)
+    # POST-PROCESS 2: fix any remaining collisions deterministically
     entries = post_process(entries, existing, filtered_teachers, cls_name)
 
     return cors({"entries": entries, "count": len(entries)})
