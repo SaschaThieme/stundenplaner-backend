@@ -25,80 +25,145 @@ async def health():
     return cors({"status": "ok", "service": "StundenPlaner API"})
 
 
-def compact_schedule(entries, hours, start_hour):
+def assign_teachers(curriculum, filtered_teachers, existing_schedule, hours):
     """
-    Post-processing: for each class+day, remove all gaps.
-    Shifts entries to start at start_hour and be consecutive (no free periods).
+    Pre-assign exactly ONE teacher per subject for this class.
+    Returns dict: subject -> teacher_name (or "kann nicht besetzt werden")
+    Also returns set of already occupied teacher|day|time slots.
     """
-    from collections import defaultdict
-    
-    # Group by class+day
-    groups = defaultdict(list)
-    for e in entries:
-        key = (e.get("class",""), e.get("day",""))
-        groups[key].append(e)
-    
-    result = []
-    for (cls, day), day_entries in groups.items():
-        # Sort by time slot index
-        def slot_idx(e):
-            t = e.get("time","")
-            return hours.index(t) if t in hours else 999
-        
-        day_entries.sort(key=slot_idx)
-        
-        # Re-assign to consecutive slots starting from start_hour (0-indexed: start_hour-1)
-        start_idx = max(0, start_hour - 1)
-        for i, entry in enumerate(day_entries):
-            slot = start_idx + i
-            if slot < len(hours):
-                entry = {**entry, "time": hours[slot]}
-            result.append(entry)
-    
-    return result
-
-def post_process(entries, existing_schedule, teachers, cls_name):
-    """
-    Fix teacher collisions AFTER Claude generates the plan:
-    - If a teacher is already used in existing_schedule at that day/time → replace with 'kann nicht besetzt werden'
-    - Build a local collision set within this class too
-    """
-    # Build set of already occupied slots from previous classes
     occupied = set()
     for e in existing_schedule:
         t = e.get("teacher","")
         if t and t != "kann nicht besetzt werden":
             occupied.add(f"{t}|{e.get('day','')}|{e.get('time','')}")
 
-    # Build teacher→subjects map for validation
-    teacher_subjects = {}
-    for t in teachers:
-        teacher_subjects[t.get("name","")] = set(t.get("subjects",[]))
+    # Build teacher -> subjects map
+    teacher_subjects = {t["name"]: set(t.get("subjects",[])) for t in filtered_teachers}
 
-    fixed = []
-    local_occupied = set()  # collisions within this class's new entries
+    # Count how many slots each teacher already has occupied
+    teacher_load = defaultdict(int)
+    for key in occupied:
+        name = key.split("|")[0]
+        teacher_load[name] += 1
 
-    for e in entries:
-        teacher = e.get("teacher","")
-        day = e.get("day","")
-        time = e.get("time","")
-        subject = e.get("subject","")
-        slot_key = f"{teacher}|{day}|{time}"
+    assignments = {}
+    for subject, hours_needed in curriculum.items():
+        # Find teachers who can teach this subject, sorted by current load (least busy first)
+        candidates = [
+            t["name"] for t in filtered_teachers
+            if subject in teacher_subjects.get(t["name"], set())
+        ]
+        candidates.sort(key=lambda n: teacher_load[n])
+        assignments[subject] = candidates[0] if candidates else "kann nicht besetzt werden"
 
-        # Fix: teacher already used elsewhere at same time
-        if teacher and teacher != "kann nicht besetzt werden":
-            if slot_key in occupied or slot_key in local_occupied:
-                e = {**e, "teacher": "kann nicht besetzt werden"}
-            # Fix: teacher doesn't teach this subject
-            elif teacher in teacher_subjects and subject not in teacher_subjects[teacher]:
-                e = {**e, "teacher": "kann nicht besetzt werden"}
-            else:
-                local_occupied.add(slot_key)
-                occupied.add(slot_key)
+    return assignments, occupied
 
-        fixed.append(e)
 
-    return fixed
+def build_schedule(curriculum, teacher_assignments, occupied, hours, days, start_hour, max_per_day):
+    """
+    Deterministically build a valid schedule:
+    - Exact curriculum counts
+    - No teacher collisions
+    - No gaps (compact from start_hour)
+    - Block pairing for even numbers; odd = pairs + 1 single
+    """
+    start_idx = max(0, start_hour - 1)
+    
+    # Plan distribution: subject -> list of (day, count) meaning X consecutive slots on that day
+    # Strategy: spread evenly, pair where possible
+    subject_plan = []  # list of (subject, teacher, count_on_day) to schedule as blocks
+    
+    for subject, total in curriculum.items():
+        teacher = teacher_assignments[subject]
+        max_day = max_per_day.get(subject, 2)
+        
+        remaining = int(total)  # handle 0.5 for biweekly
+        blocks = []
+        
+        if remaining == 1:
+            blocks = [1]
+        elif remaining == 2:
+            blocks = [2]
+        elif remaining == 3:
+            blocks = [2, 1]
+        elif remaining == 4:
+            blocks = [2, 2]
+        elif remaining == 5:
+            blocks = [2, 2, 1]
+        elif remaining == 6:
+            blocks = [2, 2, 2]
+        else:
+            # General: fill with max_day blocks
+            while remaining > 0:
+                b = min(max_day, remaining)
+                blocks.append(b)
+                remaining -= b
+        
+        for b in blocks:
+            subject_plan.append((subject, teacher, b))
+
+    # Sort: larger blocks first for better packing
+    subject_plan.sort(key=lambda x: -x[2])
+
+    # Assign to days: track slots used per day
+    # day_slots[day] = list of entries already assigned
+    day_slots = {d: [] for d in days}
+    
+    entries = []
+    
+    for subject, teacher, block_size in subject_plan:
+        placed = False
+        # Try each day
+        for day in days:
+            current_count = len(day_slots[day])
+            # Check if block fits
+            if start_idx + current_count + block_size > len(hours):
+                continue
+            # Check teacher collision for all slots in block
+            ok = True
+            for i in range(block_size):
+                slot_time = hours[start_idx + current_count + i]
+                if f"{teacher}|{day}|{slot_time}" in occupied:
+                    ok = False
+                    break
+            if ok:
+                # Place block
+                for i in range(block_size):
+                    slot_time = hours[start_idx + current_count + i]
+                    entry = {
+                        "day": day,
+                        "time": slot_time,
+                        "subject": subject,
+                        "teacher": teacher,
+                        "class": ""  # filled in caller
+                    }
+                    day_slots[day].append(entry)
+                    entries.append(entry)
+                    if teacher != "kann nicht besetzt werden":
+                        occupied.add(f"{teacher}|{day}|{slot_time}")
+                placed = True
+                break
+        
+        if not placed:
+            # Force-place with "kann nicht besetzt werden" on least-loaded day
+            best_day = min(days, key=lambda d: len(day_slots[d]))
+            for i in range(block_size):
+                current_count = len(day_slots[best_day])
+                if start_idx + current_count >= len(hours):
+                    break
+                slot_time = hours[start_idx + current_count]
+                entry = {
+                    "day": best_day,
+                    "time": slot_time,
+                    "subject": subject,
+                    "teacher": "kann nicht besetzt werden",
+                    "class": ""
+                }
+                day_slots[best_day].append(entry)
+                entries.append(entry)
+
+    return entries
+
 
 @app.post("/api/generate-class")
 async def generate_class(request: Request):
@@ -115,123 +180,40 @@ async def generate_class(request: Request):
     locked          = req.get("locked_entries", [])
     hours           = req.get("hours", HOURS)
     max_per_day     = req.get("max_per_day", {})
-    no_free_periods = req.get("no_free_periods", True)
     start_hour      = req.get("start_hour", 1)
 
-    # Build occupied slots string for prompt
-    occupied_list = [
-        f"{e.get('teacher','')}|{e.get('day','')}|{e.get('time','')}"
-        for e in existing
-        if e.get("teacher","") and e.get("teacher","") != "kann nicht besetzt werden"
-    ]
-    occ_info = ("\nBEREITS BELEGTE LEHRER-SLOTS (STRIKT verboten für diese Klasse):\n"
-                + json.dumps(occupied_list, ensure_ascii=False)) if occupied_list else ""
-
-    lck = [e for e in locked if e.get("class") == cls.get("name")]
-    lck_info = ("\nGESPERRTE EINTRÄGE: " + json.dumps(lck, ensure_ascii=False)) if lck else ""
+    cls_name = cls.get("name","?")
+    curriculum = {k: v for k, v in (cls.get("curriculum") or {}).items() if v > 0}
 
     # Filter teachers by grade
     cls_name_str = cls.get("name","")
     cls_grade = int(''.join(filter(str.isdigit, cls_name_str))[:2] or 0) if any(c.isdigit() for c in cls_name_str) else 0
     filtered_teachers = [t for t in teachers if not t.get("grades") or not cls_grade or cls_grade in t.get("grades",[])]
-    teacher_list = [{"name": t.get("name",""), "subjects": t.get("subjects",[])} for t in filtered_teachers]
 
-    cls_name = cls.get("name","?")
-    curriculum = cls.get("curriculum", {})
+    # Handle locked entries - add them first
+    locked_for_class = [e for e in locked if e.get("class") == cls_name]
+    locked_subjects = defaultdict(int)
+    for e in locked_for_class:
+        locked_subjects[e.get("subject","")] += 1
 
-    # Which subjects have no teacher available?
-    covered = set(s for t in filtered_teachers for s in t.get("subjects",[]))
-    unplannable = [s for s in curriculum if s not in covered]
+    # Reduce curriculum by already-locked entries
+    remaining_curriculum = {}
+    for subj, count in curriculum.items():
+        remaining = count - locked_subjects.get(subj, 0)
+        if remaining > 0:
+            remaining_curriculum[subj] = remaining
 
-    start_rule = ""
-    if start_hour > 1 and len(hours) >= start_hour:
-        start_rule = (f"9. UNTERRICHTSBEGINN: Klasse beginnt erst ab Zeitslot Nr.{start_hour} "
-                      f"(Zeit {hours[start_hour-1]}). Slots davor bleiben LEER.\n")
+    # Pre-assign teachers
+    teacher_assignments, occupied = assign_teachers(remaining_curriculum, filtered_teachers, existing, hours)
 
-    max_rule = ""
-    if max_per_day:
-        max_rule = f"10. MAX PRO TAG: {json.dumps(max_per_day, ensure_ascii=False)}\n"
+    # Build schedule deterministically
+    entries = build_schedule(remaining_curriculum, teacher_assignments, occupied, hours, DAYS, start_hour, max_per_day)
 
-    prompt = (
-        f"Du bist ein Stundenplan-Solver fuer Klasse {cls_name} an einer deutschen Schule.\n\n"
-        f"KLASSE: {json.dumps(cls, ensure_ascii=False)}\n"
-        f"LEHRKRAEFTE (nur diese duerfen verwendet werden): {json.dumps(teacher_list, ensure_ascii=False)}\n"
-        f"TAGE: {json.dumps(DAYS, ensure_ascii=False)}\n"
-        f"ZEITSLOTS: {json.dumps(hours, ensure_ascii=False)}\n"
-        + occ_info + lck_info + "\n\n"
-        "STRIKTE REGELN:\n"
-        "1. KOLLISION VERBOTEN: Jede Lehrkraft darf pro Tag+Zeit nur EINMAL eingeplant werden - auch klassenübergreifend!\n"
-        "   Die oben genannten belegten Slots sind ABSOLUT verboten.\n"
-        "2. Lehrkraft unterrichtet NUR ihre eigenen Faecher (siehe LEHRKRAEFTE-Liste)\n"
-        "3. Stundenzahlen EXAKT wie im curriculum\n"
-        "4. KEINE FREISTUNDEN innerhalb des Tages einer Klasse\n"
-        "5. BLOCKBILDUNG: Mehrere Stunden desselben Fachs an einem Tag → immer direkt nacheinander\n"
-        "6. Gleichmaessige Verteilung ueber die Woche\n"
-        + start_rule + max_rule +
-        "\nWICHTIG: Falls kein Lehrer fuer ein Fach verfuegbar ist (wegen Kollision oder fehlendem Fach), "
-        "trage 'kann nicht besetzt werden' als teacher ein. NIEMALS eine Stunde weglassen!\n"
-        + (f"\nHINWEIS: Fuer folgende Faecher gibt es KEINEN Lehrer, trage direkt 'kann nicht besetzt werden' ein: {unplannable}\n" if unplannable else "")
-        + f'\nAUSGABE: Nur rohes JSON-Array, direkt mit [ beginnen:\n'
-        f'[{{"day":"Montag","time":"{hours[0] if hours else "07:45"}","class":"{cls_name}","subject":"Mathematik","teacher":"Fr. Mueller"}}]'
-    )
+    # Set class name on all entries
+    for e in entries:
+        e["class"] = cls_name
 
-    try:
-        async with httpx.AsyncClient(timeout=90) as client:
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": ANTHROPIC_API_KEY,
-                    "anthropic-version": "2023-06-01",
-                    "content-type": "application/json"
-                },
-                json={
-                    "model": "claude-sonnet-4-6",
-                    "max_tokens": 8192,
-                    "messages": [{"role": "user", "content": prompt}]
-                }
-            )
-    except Exception as e:
-        return cors({"detail": "Netzwerkfehler: " + str(e)}, 502)
+    # Merge with locked entries
+    all_entries = locked_for_class + entries
 
-    if response.status_code != 200:
-        return cors({"detail": "Anthropic Fehler: " + response.text[:200]}, 502)
-
-    data  = response.json()
-    text  = "".join(b.get("text","") for b in data.get("content",[]))
-    clean = text.replace("```json","").replace("```","").strip()
-
-    entries = None
-    try:
-        entries = json.loads(clean)
-    except:
-        pass
-
-    if entries is None:
-        match = re.search(r'\[[\s\S]*\]', clean)
-        if match:
-            try: entries = json.loads(match.group())
-            except: pass
-
-    if entries is None:
-        match = re.search(r'\[[\s\S]*\}', clean)
-        if match:
-            partial = match.group()
-            depth, last_complete = 0, 0
-            for i, ch in enumerate(partial):
-                if ch == '{': depth += 1
-                elif ch == '}':
-                    depth -= 1
-                    if depth == 0: last_complete = i + 1
-            if last_complete > 0:
-                try: entries = json.loads(partial[:last_complete] + ']')
-                except: pass
-
-    if entries is None:
-        return cors({"detail": f"JSON-Parse fehlgeschlagen: {clean[:300]}"}, 500)
-
-    # POST-PROCESS 1: compact schedule (remove gaps, enforce start_hour)
-    entries = compact_schedule(entries, hours, start_hour)
-    # POST-PROCESS 2: fix any remaining collisions deterministically
-    entries = post_process(entries, existing, filtered_teachers, cls_name)
-
-    return cors({"entries": entries, "count": len(entries)})
+    return cors({"entries": all_entries, "count": len(all_entries)})
