@@ -23,7 +23,7 @@ async def options(path: str): return cors({})
 async def health(): return cors({"status": "ok", "service": "StundenPlaner API"})
 
 
-def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days, start_hour, max_per_day, cls_name, cls_index=0):
+def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days, start_hour, max_per_day, cls_name, cls_index=0, teacher_hours_used=None):
     """
     Fully deterministic schedule builder.
     - One teacher per subject (pre-assigned)
@@ -198,6 +198,13 @@ async def generate_class(request: Request):
     # Subtract locked from curriculum
     remaining = {s: c - locked_subjects.get(s, 0) for s, c in curriculum.items() if c - locked_subjects.get(s, 0) > 0}
 
+    # Build teacher_hours_used from already-generated classes
+    teacher_hours_used = defaultdict(int)
+    for e in existing:
+        t = e.get("teacher","")
+        if t and t != "kann nicht besetzt werden":
+            teacher_hours_used[t] += 1
+
     # Build occupied set from existing schedule
     existing_occupied = [
         f"{e.get('teacher','')}|{e.get('day','')}|{e.get('time','')}"
@@ -205,7 +212,7 @@ async def generate_class(request: Request):
         if e.get("teacher", "") and e.get("teacher", "") != "kann nicht besetzt werden"
     ]
 
-    entries = build_schedule(remaining, filtered_teachers, existing_occupied, hours, DAYS, start_hour, max_per_day, cls_name, cls_index)
+    entries = build_schedule(remaining, filtered_teachers, existing_occupied, hours, DAYS, start_hour, max_per_day, cls_name, cls_index, teacher_hours_used)
     all_entries = locked_for_class + entries
 
     return cors({"entries": all_entries, "count": len(all_entries)})
