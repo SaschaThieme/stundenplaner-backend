@@ -576,6 +576,18 @@ function ScheduleTab({schedule,lockedSlots,onToggleLock,classes,teachers,slots})
       {[...teachers].sort((a,b)=>{const ln=n=>n.replace(/^(Fr\.|Hr\.\s*)/,'').trim();return ln(a.name).localeCompare(ln(b.name));}).map(t=><button key={t.name} onClick={()=>setFilter({type:"teacher",key:t.name})} style={{padding:"4px 12px",borderRadius:16,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:filter.type==="teacher"&&filter.key===t.name?"#4a9eff":"#1e2533",color:filter.type==="teacher"&&filter.key===t.name?"#0d0d0d":"#c0cce0"}}>{t.name.replace("Fr. ","").replace("Hr. ","")}</button>)}
     </div>
     {lockedSlots.size>0&&<div style={{background:"#1a1400",border:"1px solid #f5c84233",borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:"#f5c842"}}>🔒 {lockedSlots.size} gesperrte Slots – bleiben beim nächsten Generieren erhalten</div>}
+    {filter.type==="class"&&schedule&&(()=>{
+      const cls=classes.find(c=>c.name===filter.key);
+      if(!cls)return null;
+      const currTotal=Object.values(cls.curriculum||{}).reduce((a,b)=>a+b,0);
+      const planned=schedule.filter(e=>e.class===filter.key).length;
+      return <div style={{background:"#111827",border:"1px solid #1e2533",borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:"#a0b4c8",display:"flex",gap:16,alignItems:"center"}}>
+        <span>Stunden/Woche laut Stundentafel: <strong style={{color:"#f5c842",fontFamily:"monospace"}}>{currTotal}</strong></span>
+        <span style={{color:"#4a6080"}}>·</span>
+        <span>Im Plan: <strong style={{color:planned===currTotal?"#4aff9e":"#ff6b4a",fontFamily:"monospace"}}>{planned}</strong></span>
+        {planned!==currTotal&&<span style={{color:"#ff6b4a",fontSize:11}}>⚠ Abweichung: {planned-currTotal>0?"+":""}{planned-currTotal}</span>}
+      </div>;
+    })()}
     {filter.type==="teacher"&&schedule&&<div style={{background:"#111827",border:"1px solid #1e2533",borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:"#a0b4c8",display:"flex",gap:16,alignItems:"center"}}>
       <span>👤 <strong style={{color:"#f0f6ff"}}>{filter.key}</strong></span>
       {(()=>{const t=teachers.find(t=>t.name===filter.key);const planned=schedule.filter(e=>e.teacher===filter.key).length;const deputat=t?.deputat||"?";const ok=planned<=deputat;return <span>Geplante Stunden: <strong style={{color:ok?"#4aff9e":"#ff6b4a",fontFamily:"monospace"}}>{planned}</strong><span style={{color:"#8899aa"}}> / {deputat} Deputat</span>{!ok&&<span style={{color:"#ff6b4a",fontSize:10,marginLeft:4}}>⚠ überschritten</span>}</span>;})()}
