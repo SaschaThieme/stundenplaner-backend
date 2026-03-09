@@ -118,11 +118,16 @@ def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days
                 continue
             # Check teacher not already on this day at these slots
             ok = True
-            for i in range(block_size):
-                slot = hours[start_idx + cur + i]
-                if teacher != "kann nicht besetzt werden" and f"{teacher}|{day}|{slot}" in occupied:
-                    ok = False
-                    break
+            # Hard block: subject already on this day? skip (prevents 4x Mathe same day)
+            subject_on_day = block[0][0]
+            if any(s == subject_on_day for s, _ in day_schedule[day]):
+                ok = False
+            if ok:
+                for i in range(block_size):
+                    slot = hours[start_idx + cur + i]
+                    if teacher != "kann nicht besetzt werden" and f"{teacher}|{day}|{slot}" in occupied:
+                        ok = False
+                        break
             if ok:
                 for i, (subj, tch) in enumerate(block):
                     slot = hours[start_idx + cur + i]
