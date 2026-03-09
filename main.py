@@ -23,7 +23,7 @@ async def options(path: str): return cors({})
 async def health(): return cors({"status": "ok", "service": "StundenPlaner API"})
 
 
-def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days, start_hour, max_per_day, cls_name):
+def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days, start_hour, max_per_day, cls_name, cls_index=0):
     """
     Fully deterministic schedule builder.
     - One teacher per subject (pre-assigned)
@@ -106,7 +106,7 @@ def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days
             slots_used = len(day_schedule[d])
             teacher_penalty = 20 if (d in teacher_on_day and teacher != "kann nicht besetzt werden") else 0
             return slots_used + teacher_penalty
-        day_order = sorted(days, key=day_score)
+        day_order = sorted(rotated_days, key=day_score)
         placed = False
 
         for day in day_order:
@@ -131,7 +131,7 @@ def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days
 
         if not placed:
             # Fallback: force onto least-loaded day ignoring teacher collision → mark unbesetzt
-            day = min(days, key=lambda d: len(day_schedule[d]))
+            day = min(rotated_days, key=lambda d: len(day_schedule[d]))
             for subj, _ in block:
                 cur = len(day_schedule[day])
                 if start_idx + cur < len(hours):
@@ -169,8 +169,9 @@ async def generate_class(request: Request):
     max_per_day = req.get("max_per_day", {})
     start_hour  = req.get("start_hour", 1)
 
-    cls_name   = cls.get("name", "?")
-    curriculum = {k: v for k, v in (cls.get("curriculum") or {}).items() if v > 0}
+    cls_name    = cls.get("name", "?")
+    cls_index   = req.get("cls_index", 0)   # which class in generation order (0,1,2,...)
+    curriculum  = {k: v for k, v in (cls.get("curriculum") or {}).items() if v > 0}
 
     # Filter teachers by grade
     cls_name_str = cls.get("name", "")
@@ -196,7 +197,7 @@ async def generate_class(request: Request):
         if e.get("teacher", "") and e.get("teacher", "") != "kann nicht besetzt werden"
     ]
 
-    entries = build_schedule(remaining, filtered_teachers, existing_occupied, hours, DAYS, start_hour, max_per_day, cls_name)
+    entries = build_schedule(remaining, filtered_teachers, existing_occupied, hours, DAYS, start_hour, max_per_day, cls_name, cls_index)
     all_entries = locked_for_class + entries
 
     return cors({"entries": all_entries, "count": len(all_entries)})
