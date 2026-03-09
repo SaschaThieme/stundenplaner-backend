@@ -571,9 +571,9 @@ function ScheduleTab({schedule,lockedSlots,onToggleLock,classes,teachers,slots})
   return <div style={{animation:"fadeIn 0.2s ease"}}>
     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16,flexWrap:"wrap"}}>
       <span style={{fontSize:12,color:"#a0b4c8"}}>Klasse:</span>
-      {classes.map(c=><button key={c.name} onClick={()=>setFilter({type:"class",key:c.name})} style={{padding:"4px 12px",borderRadius:16,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,background:filter.type==="class"&&filter.key===c.name?"#f5c842":"#1e2533",color:filter.type==="class"&&filter.key===c.name?"#0d0d0d":"#c0cce0"}}>{c.name}</button>)}
+      {[...classes].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map(c=><button key={c.name} onClick={()=>setFilter({type:"class",key:c.name})} style={{padding:"4px 12px",borderRadius:16,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,background:filter.type==="class"&&filter.key===c.name?"#f5c842":"#1e2533",color:filter.type==="class"&&filter.key===c.name?"#0d0d0d":"#c0cce0"}}>{c.name}</button>)}
       <span style={{fontSize:12,color:"#a0b4c8",marginLeft:8}}>Lehrer:</span>
-      {teachers.map(t=><button key={t.name} onClick={()=>setFilter({type:"teacher",key:t.name})} style={{padding:"4px 12px",borderRadius:16,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:filter.type==="teacher"&&filter.key===t.name?"#4a9eff":"#1e2533",color:filter.type==="teacher"&&filter.key===t.name?"#0d0d0d":"#c0cce0"}}>{t.name.replace("Fr. ","").replace("Hr. ","")}</button>)}
+      {[...teachers].sort((a,b)=>a.name.localeCompare(b.name)).map(t=><button key={t.name} onClick={()=>setFilter({type:"teacher",key:t.name})} style={{padding:"4px 12px",borderRadius:16,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:filter.type==="teacher"&&filter.key===t.name?"#4a9eff":"#1e2533",color:filter.type==="teacher"&&filter.key===t.name?"#0d0d0d":"#c0cce0"}}>{t.name.replace("Fr. ","").replace("Hr. ","")}</button>)}
     </div>
     {lockedSlots.size>0&&<div style={{background:"#1a1400",border:"1px solid #f5c84233",borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:"#f5c842"}}>🔒 {lockedSlots.size} gesperrte Slots – bleiben beim nächsten Generieren erhalten</div>}
     {filter.type==="teacher"&&schedule&&<div style={{background:"#111827",border:"1px solid #1e2533",borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:"#a0b4c8",display:"flex",gap:16,alignItems:"center"}}>
@@ -703,7 +703,7 @@ function App(){
         const resp=await fetch(`${BACKEND_URL}/api/generate-class`,{
           method:"POST",
           headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({cls,teachers,existing_schedule:allEntries,locked_entries:lockedEntries,hours,max_per_day:cls.maxPerDay||{},block_subjects:true,no_free_periods:true,start_hour:cls.startHour||1})
+          body:JSON.stringify({cls,cls_index:i,teachers,existing_schedule:allEntries,locked_entries:lockedEntries,hours,max_per_day:cls.maxPerDay||{},block_subjects:true,no_free_periods:true,start_hour:cls.startHour||1})
         });
         if(!resp.ok){const err=await resp.json().catch(()=>({detail:"Unbekannter Fehler"}));throw new Error(`Klasse ${cls.name}: ${err.detail||"Backend-Fehler"}`);}
         const data=await resp.json();
