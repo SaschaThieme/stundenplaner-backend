@@ -77,7 +77,7 @@ async def generate_class(request: Request):
         "6. BLOCKBILDUNG: Wenn ein Fach an einem Tag mehrfach vorkommt, Stunden direkt nacheinander planen\n"
         "7. Kernfaecher (Mathe,Deutsch) moeglichst in den ersten 5 Stunden\n"
         "8. Gleichmaessige Verteilung ueber die Woche\n"
-        + (f"9. UNTERRICHTSBEGINN: Fuer diese Klasse beginnt der Unterricht erst ab der {start_hour}. Stunde des Tages (nicht frueher!)\n" if start_hour > 1 else "")
+        + (f"9. UNTERRICHTSBEGINN PFLICHT: Der erste Unterricht dieser Klasse darf NICHT vor Zeitslot {start_hour} (Index {start_hour-1}, Zeit: {hours[start_hour-1] if len(hours) >= start_hour else 'Ende'}) stattfinden. Die ersten {start_hour-1} Zeitslots des Tages bleiben fuer diese Klasse IMMER frei!\n" if start_hour > 1 else "")
         + (("9. MAX STUNDEN PRO TAG pro Fach: " + json.dumps(max_per_day, ensure_ascii=False) + "\n") if max_per_day else "")
         + "\n"
         "AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.\n"
