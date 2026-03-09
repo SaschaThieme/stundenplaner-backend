@@ -613,22 +613,22 @@ function ScheduleTab({schedule,lockedSlots,onToggleLock,classes,teachers,slots})
         if(e.teacher==="kann nicht besetzt werden") unassignedBySubject[e.subject]=(unassignedBySubject[e.subject]||0)+1;
       });
       // done = planned minus unassigned (actually taught)
-      const missing=Object.entries(cls.curriculum||{}).filter(([s,h])=>{
-        const realDone=(planned[s]||0)-(unassignedBySubject[s]||0);
-        return realDone<h;
-      }).map(([s,h])=>{
-        const realDone=(planned[s]||0)-(unassignedBySubject[s]||0);
-        return {subject:s,needed:h,done:realDone,missing:h-realDone};
-      });
-      const unassigned=schedule.filter(e=>e.class===filter.key&&e.teacher==="kann nicht besetzt werden");
-      if(missing.length===0&&unassigned.length===0)return null;
-      return <div style={{marginTop:16,background:"#111827",border:"1px solid #1e2533",borderRadius:12,padding:20,maxWidth:400}}>
-        <div style={{fontSize:18,fontWeight:800,color:"#ff8080",marginBottom:4}}>⚠ Unbesetzte Stunden</div>
-        <div style={{fontSize:12,color:"#a0b4c8",marginBottom:14}}>{unassigned.length} Stunden konnten nicht besetzt werden</div>
-        {missing.map(({subject,needed,done,missing:m})=>{const col=SUBJECT_COLORS[subject]||"#ff4a4a";return <div key={subject} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-          <div style={{width:80,fontSize:12,color:col,fontWeight:600,flexShrink:0}}>{subject}</div>
+      // Build full picture: all subjects from curriculum
+      const allSubjectRows = Object.entries(cls.curriculum||{}).map(([s,h])=>{
+        const totalPlanned = planned[s]||0;
+        const unassignedCount = unassignedBySubject[s]||0;
+        const realDone = totalPlanned - unassignedCount;
+        return {subject:s, needed:h, done:realDone, unassigned:unassignedCount, missing:Math.max(0,h-realDone)};
+      }).filter(r=>r.missing>0 || r.unassigned>0);
+      const totalUnassigned = Object.values(unassignedBySubject).reduce((a,b)=>a+b,0);
+      if(allSubjectRows.length===0)return null;
+      return <div style={{marginTop:16,background:"#111827",border:"1px solid #1e2533",borderRadius:12,padding:20,maxWidth:420}}>
+        <div style={{fontSize:16,fontWeight:800,color:"#ff8080",marginBottom:2}}>⚠ Unbesetzte Stunden</div>
+        <div style={{fontSize:12,color:"#a0b4c8",marginBottom:14}}>{totalUnassigned} Stunden konnten nicht besetzt werden</div>
+        {allSubjectRows.map(({subject,needed,done,missing:m})=>{const col=SUBJECT_COLORS[subject]||"#ff4a4a";return <div key={subject} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div style={{width:90,fontSize:12,color:col,fontWeight:600,flexShrink:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{subject}</div>
           <div style={{flex:1,height:6,background:"#1a2030",borderRadius:3,overflow:"hidden"}}>
-            <div style={{height:"100%",width:`${(done/needed)*100}%`,background:col,borderRadius:3,opacity:0.8}}/>
+            <div style={{height:"100%",width:`${needed>0?(done/needed)*100:0}%`,background:col,borderRadius:3,opacity:0.8}}/>
           </div>
           <span style={{fontSize:11,fontFamily:"monospace",color:"#ff8080",width:36,textAlign:"right"}}>{done}/{needed}</span>
           <span style={{fontSize:11,color:"#ff6b4a",fontWeight:700,width:32}}>−{m}×</span>
