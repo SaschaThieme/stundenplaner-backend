@@ -91,6 +91,9 @@ def build_schedule(curriculum, filtered_teachers, existing_occupied, hours, days
     # Sort blocks largest first for better packing
     blocks.sort(key=lambda b: -len(b))
 
+    # Rotate preferred starting day per class to prevent clustering
+    offset = cls_index % len(days)
+    rotated_days = days[offset:] + days[:offset]
     # Round-robin day assignment: try each day starting from least-loaded
     for block in blocks:
         block_size = len(block)
