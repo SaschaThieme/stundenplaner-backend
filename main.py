@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 import httpx, os, json, re
+from collections import defaultdict
 
 app = FastAPI(title="StundenPlaner API")
 
@@ -23,6 +24,49 @@ async def options(path: str):
 async def health():
     return cors({"status": "ok", "service": "StundenPlaner API"})
 
+def post_process(entries, existing_schedule, teachers, cls_name):
+    """
+    Fix teacher collisions AFTER Claude generates the plan:
+    - If a teacher is already used in existing_schedule at that day/time → replace with 'kann nicht besetzt werden'
+    - Build a local collision set within this class too
+    """
+    # Build set of already occupied slots from previous classes
+    occupied = set()
+    for e in existing_schedule:
+        t = e.get("teacher","")
+        if t and t != "kann nicht besetzt werden":
+            occupied.add(f"{t}|{e.get('day','')}|{e.get('time','')}")
+
+    # Build teacher→subjects map for validation
+    teacher_subjects = {}
+    for t in teachers:
+        teacher_subjects[t.get("name","")] = set(t.get("subjects",[]))
+
+    fixed = []
+    local_occupied = set()  # collisions within this class's new entries
+
+    for e in entries:
+        teacher = e.get("teacher","")
+        day = e.get("day","")
+        time = e.get("time","")
+        subject = e.get("subject","")
+        slot_key = f"{teacher}|{day}|{time}"
+
+        # Fix: teacher already used elsewhere at same time
+        if teacher and teacher != "kann nicht besetzt werden":
+            if slot_key in occupied or slot_key in local_occupied:
+                e = {**e, "teacher": "kann nicht besetzt werden"}
+            # Fix: teacher doesn't teach this subject
+            elif teacher in teacher_subjects and subject not in teacher_subjects[teacher]:
+                e = {**e, "teacher": "kann nicht besetzt werden"}
+            else:
+                local_occupied.add(slot_key)
+                occupied.add(slot_key)
+
+        fixed.append(e)
+
+    return fixed
+
 @app.post("/api/generate-class")
 async def generate_class(request: Request):
     if not ANTHROPIC_API_KEY:
@@ -32,63 +76,74 @@ async def generate_class(request: Request):
     except:
         return cors({"detail": "Ungültige JSON-Anfrage"}, 400)
 
-    cls      = req.get("cls", {})
-    teachers = req.get("teachers", [])
-    existing = req.get("existing_schedule", [])
-    locked   = req.get("locked_entries", [])
-    hours         = req.get("hours", HOURS)
-    max_per_day      = req.get("max_per_day", {})
-    block_subjects   = req.get("block_subjects", True)
-    no_free_periods  = req.get("no_free_periods", True)
-    start_hour       = req.get("start_hour", 1)
+    cls             = req.get("cls", {})
+    teachers        = req.get("teachers", [])
+    existing        = req.get("existing_schedule", [])
+    locked          = req.get("locked_entries", [])
+    hours           = req.get("hours", HOURS)
+    max_per_day     = req.get("max_per_day", {})
+    no_free_periods = req.get("no_free_periods", True)
+    start_hour      = req.get("start_hour", 1)
 
-    # Belegte Lehrer-Slots
-    occupied = [str(e.get("teacher","")) + "|" + str(e.get("day","")) + "|" + str(e.get("time","")) for e in existing]
-    occ_info = ("\nBEREITS BELEGTE LEHRER-SLOTS (nicht verwenden):\n" + json.dumps(occupied, ensure_ascii=False)) if occupied else ""
+    # Build occupied slots string for prompt
+    occupied_list = [
+        f"{e.get('teacher','')}|{e.get('day','')}|{e.get('time','')}"
+        for e in existing
+        if e.get("teacher","") and e.get("teacher","") != "kann nicht besetzt werden"
+    ]
+    occ_info = ("\nBEREITS BELEGTE LEHRER-SLOTS (STRIKT verboten für diese Klasse):\n"
+                + json.dumps(occupied_list, ensure_ascii=False)) if occupied_list else ""
 
-    # Gesperrte Einträge für diese Klasse
     lck = [e for e in locked if e.get("class") == cls.get("name")]
     lck_info = ("\nGESPERRTE EINTRÄGE: " + json.dumps(lck, ensure_ascii=False)) if lck else ""
 
-    # Lehrkräfte vereinfachen
+    # Filter teachers by grade
     cls_name_str = cls.get("name","")
     cls_grade = int(''.join(filter(str.isdigit, cls_name_str))[:2] or 0) if any(c.isdigit() for c in cls_name_str) else 0
     filtered_teachers = [t for t in teachers if not t.get("grades") or not cls_grade or cls_grade in t.get("grades",[])]
     teacher_list = [{"name": t.get("name",""), "subjects": t.get("subjects",[])} for t in filtered_teachers]
 
-    cls_name = cls.get("name", "?")
+    cls_name = cls.get("name","?")
+    curriculum = cls.get("curriculum", {})
+
+    # Which subjects have no teacher available?
+    covered = set(s for t in filtered_teachers for s in t.get("subjects",[]))
+    unplannable = [s for s in curriculum if s not in covered]
+
+    start_rule = ""
+    if start_hour > 1 and len(hours) >= start_hour:
+        start_rule = (f"9. UNTERRICHTSBEGINN: Klasse beginnt erst ab Zeitslot Nr.{start_hour} "
+                      f"(Zeit {hours[start_hour-1]}). Slots davor bleiben LEER.\n")
+
+    max_rule = ""
+    if max_per_day:
+        max_rule = f"10. MAX PRO TAG: {json.dumps(max_per_day, ensure_ascii=False)}\n"
 
     prompt = (
-        "Du bist ein Stundenplan-Solver fuer eine deutsche Schule (Sek I).\n"
-        "Erstelle den Stundenplan NUR fuer Klasse " + cls_name + ".\n\n"
-        "KLASSE: " + json.dumps(cls, ensure_ascii=False) + "\n"
-        "LEHRKRAEFTE: " + json.dumps(teacher_list, ensure_ascii=False) + "\n"
-        "TAGE: " + json.dumps(DAYS, ensure_ascii=False) + "\n"
-        "ZEITSLOTS: " + json.dumps(hours, ensure_ascii=False) + "\n"
+        f"Du bist ein Stundenplan-Solver fuer Klasse {cls_name} an einer deutschen Schule.\n\n"
+        f"KLASSE: {json.dumps(cls, ensure_ascii=False)}\n"
+        f"LEHRKRAEFTE (nur diese duerfen verwendet werden): {json.dumps(teacher_list, ensure_ascii=False)}\n"
+        f"TAGE: {json.dumps(DAYS, ensure_ascii=False)}\n"
+        f"ZEITSLOTS: {json.dumps(hours, ensure_ascii=False)}\n"
         + occ_info + lck_info + "\n\n"
-        "STRIKTE REGELN - alle muessen eingehalten werden:\n"
-        "1. Lehrkraft NIE doppelt im selben Tag/Zeit-Slot\n"
-        "2. Bereits belegte Lehrer-Slots NICHT verwenden\n"
-        "3. Lehrkraft unterrichtet NUR ihre zugewiesenen Faecher\n"
-        "4. Stundenzahlen EXAKT wie im curriculum - nicht mehr, nicht weniger\n"
-        "5. KEINE FREISTUNDEN: Die Stunden einer Klasse muessen LUECKENLOS aufeinander folgen.\n"
-        "   Beispiel FALSCH: Mo 1.Std Mathe, 2.Std frei, 3.Std Deutsch (Luecke in Std 2!)\n"
-        "   Beispiel RICHTIG: Mo 1.Std Mathe, 2.Std Deutsch, 3.Std Englisch (keine Luecke)\n"
-        "6. BLOCKBILDUNG: Wenn ein Fach an einem Tag mehrfach vorkommt, Stunden direkt nacheinander planen\n"
-        "7. Kernfaecher (Mathe,Deutsch) moeglichst in den ersten 5 Stunden\n"
-        "8. Gleichmaessige Verteilung ueber die Woche\n"
-        + (f"9. UNTERRICHTSBEGINN PFLICHT: Der erste Unterricht dieser Klasse darf NICHT vor Zeitslot {start_hour} (Index {start_hour-1}, Zeit: {hours[start_hour-1] if len(hours) >= start_hour else 'Ende'}) stattfinden. Die ersten {start_hour-1} Zeitslots des Tages bleiben fuer diese Klasse IMMER frei!\n" if start_hour > 1 else "")
-        + (("9. MAX STUNDEN PRO TAG pro Fach: " + json.dumps(max_per_day, ensure_ascii=False) + "\n") if max_per_day else "")
-        + "\n"
-        "AUSGABE: Nur rohes JSON-Array. Kein Text. Direkt mit [ beginnen, mit ] enden.\n"
-        "WICHTIG: Alle Stunden laut Stundentafel MUESSEN im Plan erscheinen.\n"
-        "Falls kein passender Lehrer verfuegbar ist, verwende als teacher-Wert: \"kann nicht besetzt werden\"\n"
-        "NIEMALS eine Stunde weglassen - lieber unbesetzt als fehlend!\n"
-        '[{"day":"Montag","time":"07:45","class":"' + cls_name + '","subject":"Mathematik","teacher":"Fr. Mueller"}]'
+        "STRIKTE REGELN:\n"
+        "1. KOLLISION VERBOTEN: Jede Lehrkraft darf pro Tag+Zeit nur EINMAL eingeplant werden - auch klassenübergreifend!\n"
+        "   Die oben genannten belegten Slots sind ABSOLUT verboten.\n"
+        "2. Lehrkraft unterrichtet NUR ihre eigenen Faecher (siehe LEHRKRAEFTE-Liste)\n"
+        "3. Stundenzahlen EXAKT wie im curriculum\n"
+        "4. KEINE FREISTUNDEN innerhalb des Tages einer Klasse\n"
+        "5. BLOCKBILDUNG: Mehrere Stunden desselben Fachs an einem Tag → immer direkt nacheinander\n"
+        "6. Gleichmaessige Verteilung ueber die Woche\n"
+        + start_rule + max_rule +
+        "\nWICHTIG: Falls kein Lehrer fuer ein Fach verfuegbar ist (wegen Kollision oder fehlendem Fach), "
+        "trage 'kann nicht besetzt werden' als teacher ein. NIEMALS eine Stunde weglassen!\n"
+        + (f"\nHINWEIS: Fuer folgende Faecher gibt es KEINEN Lehrer, trage direkt 'kann nicht besetzt werden' ein: {unplannable}\n" if unplannable else "")
+        + f'\nAUSGABE: Nur rohes JSON-Array, direkt mit [ beginnen:\n'
+        f'[{{"day":"Montag","time":"{hours[0] if hours else "07:45"}","class":"{cls_name}","subject":"Mathematik","teacher":"Fr. Mueller"}}]'
     )
 
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=90) as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
@@ -112,40 +167,36 @@ async def generate_class(request: Request):
     text  = "".join(b.get("text","") for b in data.get("content",[]))
     clean = text.replace("```json","").replace("```","").strip()
 
-    # Try to parse JSON - with fallback for truncated responses
     entries = None
-    # Try 1: direct parse
     try:
         entries = json.loads(clean)
     except:
         pass
-    # Try 2: extract array with regex
+
     if entries is None:
         match = re.search(r'\[[\s\S]*\]', clean)
         if match:
-            try:
-                entries = json.loads(match.group())
-            except:
-                pass
-    # Try 3: recover truncated JSON - find last complete object
+            try: entries = json.loads(match.group())
+            except: pass
+
     if entries is None:
         match = re.search(r'\[[\s\S]*\}', clean)
         if match:
             partial = match.group()
-            # Count open/close braces to find last complete entry
-            depth = 0
-            last_complete = 0
+            depth, last_complete = 0, 0
             for i, ch in enumerate(partial):
                 if ch == '{': depth += 1
                 elif ch == '}':
                     depth -= 1
-                    if depth == 0:
-                        last_complete = i + 1
+                    if depth == 0: last_complete = i + 1
             if last_complete > 0:
-                try:
-                    entries = json.loads(partial[:last_complete] + ']')
-                except:
-                    pass
-    if entries is not None:
-        return cors({"entries": entries, "count": len(entries), "truncated": len(entries) < 5})
-    return cors({"detail": "JSON-Parse fehlgeschlagen: " + clean[:300]}, 500)
+                try: entries = json.loads(partial[:last_complete] + ']')
+                except: pass
+
+    if entries is None:
+        return cors({"detail": f"JSON-Parse fehlgeschlagen: {clean[:300]}"}, 500)
+
+    # POST-PROCESS: fix any remaining collisions deterministically
+    entries = post_process(entries, existing, filtered_teachers, cls_name)
+
+    return cors({"entries": entries, "count": len(entries)})
