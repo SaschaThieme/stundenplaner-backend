@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>StundenPlaner</title>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Outfit','Segoe UI',sans-serif;background:#0a0e18;color:#d0dae8;min-height:100vh}
+  ::-webkit-scrollbar{width:5px;height:5px}
+  ::-webkit-scrollbar-track{background:#0d111a}
+  ::-webkit-scrollbar-thumb{background:#1e2533;border-radius:3px}
+  input,select{outline:none;font-family:inherit}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  .card{background:#111827;border-radius:12px;border:1px solid #1e2533}
+  .slot-cell:hover .lock-hint{opacity:1!important}
+  .row-hover:hover{background:#151d2e!important}
+  @media print{
+    header,nav,.no-print{display:none!important}
+    #print-area{display:block!important}
+    body{background:white;color:black}
+    .card{border:1px solid #ccc}
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useCallback } = React;
+
+const BACKEND_URL = "https://web-production-a1130.up.railway.app";
+const DAYS_SHORT = ["Mo","Di","Mi","Do","Fr"];
+const DAYS_FULL  = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag"];
+const DEFAULT_SLOTS = [
+  {label:"1.",start:"07:45",end:"08:30",type:"lesson"},
+  {label:"2.",start:"08:30",end:"09:15",type:"lesson"},
+  {label:"P",start:"09:15",end:"09:30",type:"break"},
+  {label:"3.",start:"09:30",end:"10:15",type:"lesson"},
+  {label:"4.",start:"10:15",end:"11:00",type:"lesson"},
+  {label:"P",start:"11:00",end:"11:15",type:"break"},
+  {label:"5.",start:"11:15",end:"12:00",type:"lesson"},
+  {label:"6.",start:"12:00",end:"12:45",type:"lesson"},
+  {label:"P",start:"12:45",end:"13:00",type:"break"},
+  {label:"7.",start:"13:00",end:"13:45",type:"lesson"},
+  {label:"8.",start:"13:45",end:"14:30",type:"lesson"},
+  {label:"9.",start:"14:30",end:"15:15",type:"lesson"},
+];
+function loadSlots(){try{const s=localStorage.getItem("sp_slots");return s?JSON.parse(s):DEFAULT_SLOTS;}catch{return DEFAULT_SLOTS;}}
+function saveSlots(s){try{localStorage.setItem("sp_slots",JSON.stringify(s));}catch{}}
+const HOURS_FROM_SLOTS = (slots) => slots.filter(s=>s.type==="lesson").map(s=>s.start);
+// Legacy compat
+const HOUR_LABELS= ["1.","2.","3.","4.","5.","6.","7.","8."];
+const ALL_SUBJECTS = ["Mathematik","Deutsch","Englisch","Physik","Chemie","Biologie","Geschichte","Geographie","Informatik","Sport","Kunst","Musik","Ethik","Religion"];
+const SUBJECT_COLORS = {
+  "Mathematik":"#4a9eff","Deutsch":"#ff6b4a","Englisch":"#4aff9e","Physik":"#c44aff",
+  "Geschichte":"#ffb84a","Biologie":"#4affd0","Chemie":"#ff4ab8","Sport":"#a0ff4a",
+  "Kunst":"#ffe44a","Musik":"#4ae4ff","Informatik":"#8a8aff","Geographie":"#4aff6e",
+  "Ethik":"#ff9f4a","Religion":"#ff7eb3",
+};
+const DEFAULT_TEACHERS = [
+  {id:"t1",name:"Fr. Müller",subjects:["Mathematik","Physik"],deputat:24,availability:{Mo:[1,2,3,4,5,6],Di:[1,2,3,4,5,6,7,8],Mi:[1,2,3,4,5,6],Do:[1,2,3,4,5,6,7,8],Fr:[1,2,3,4]}},
+  {id:"t2",name:"Hr. Schmidt",subjects:["Deutsch","Geschichte"],deputat:22,availability:{Mo:[1,2,3,4,5,6,7,8],Di:[1,2,3,4,5,6,7,8],Mi:[1,2,3,4,5,6,7,8],Do:[1,2,3,4,5,6,7,8],Fr:[1,2,3,4,5,6,7,8]}},
+  {id:"t3",name:"Fr. Wagner",subjects:["Englisch","Kunst"],deputat:20,availability:{Mo:[1,2,3,4,5,6],Di:[1,2,3,4,5,6],Mi:[1,2,3,4,5,6],Do:[1,2,3,4,5,6],Fr:[1,2,3,4]}},
+  {id:"t4",name:"Hr. Fischer",subjects:["Biologie","Chemie"],deputat:22,availability:{Mo:[1,2,3,4,5,6,7,8],Di:[1,2,3,4,5,6,7,8],Mi:[1,2,3,4,5,6,7,8],Do:[1,2,3,4,5,6,7,8],Fr:[1,2,3,4,5,6,7,8]}},
+  {id:"t5",name:"Fr. Weber",subjects:["Sport","Geographie"],deputat:18,availability:{Mo:[1,2,3,4,5,6],Di:[3,4,5,6,7,8],Mi:[1,2,3,4,5,6],Do:[3,4,5,6,7,8],Fr:[1,2,3,4]}},
+  {id:"t6",name:"Hr. Becker",subjects:["Informatik","Mathematik"],deputat:20,availability:{Mo:[1,2,3,4,5,6,7,8],Di:[1,2,3,4,5,6,7,8],Mi:[1,2,3,4,5,6,7,8],Do:[1,2,3,4,5,6,7,8],Fr:[1,2,3,4,5,6,7,8]}},
+  {id:"t7",name:"Fr. Hoffmann",subjects:["Musik","Deutsch"],deputat:18,availability:{Mo:[1,2,3,4,5,6,7,8],Di:[1,2,3,4,5,6,7,8],Mi:[1,2,3,4,5,6,7,8],Do:[1,2,3,4,5,6,7,8],Fr:[1,2,3,4,5,6]}},
+];
+const DEFAULT_CLASSES = [
+  {id:"k1",name:"5a",curriculum:{"Mathematik":4,"Deutsch":4,"Englisch":3,"Geschichte":2,"Biologie":2,"Sport":2,"Kunst":2,"Musik":1}},
+  {id:"k2",name:"7b",curriculum:{"Mathematik":4,"Deutsch":3,"Englisch":3,"Physik":2,"Geschichte":2,"Chemie":2,"Sport":2,"Geographie":1}},
+  {id:"k3",name:"9c",curriculum:{"Mathematik":4,"Deutsch":3,"Englisch":3,"Physik":3,"Chemie":2,"Geschichte":2,"Informatik":2,"Sport":2}},
+  {id:"k4",name:"11d",curriculum:{"Mathematik":4,"Deutsch":3,"Englisch":3,"Physik":3,"Chemie":2,"Informatik":3,"Geschichte":2,"Biologie":2}},
+];
+
+function loadState() {
+  try {
+    const t = localStorage.getItem("sp_teachers");
+    const c = localStorage.getItem("sp_classes");
+    const s = localStorage.getItem("sp_schedule");
+    const l = localStorage.getItem("sp_locked");
+    return {
+      teachers: t ? JSON.parse(t) : DEFAULT_TEACHERS,
+      classes:  c ? JSON.parse(c) : DEFAULT_CLASSES,
+      schedule: s ? JSON.parse(s) : null,
+      locked:   l ? new Set(JSON.parse(l)) : new Set(),
+      slots:    loadSlots(),
+    };
+  } catch { return {teachers:DEFAULT_TEACHERS,classes:DEFAULT_CLASSES,schedule:null,locked:new Set(),slots:DEFAULT_SLOTS}; }
+}
+const saveTeachers = d => { try{localStorage.setItem("sp_teachers",JSON.stringify(d))}catch{} };
+const saveClasses  = d => { try{localStorage.setItem("sp_classes", JSON.stringify(d))}catch{} };
+const saveSchedule = d => { try{localStorage.setItem("sp_schedule",JSON.stringify(d))}catch{} };
+const saveLocked   = d => { try{localStorage.setItem("sp_locked",  JSON.stringify([...d]))}catch{} };
+
+function runValidation(teachers, classes) {
+  const errors=[], warnings=[];
+  const covered = new Set(teachers.flatMap(t=>t.subjects));
+  const needed  = new Set(classes.flatMap(c=>Object.keys(c.curriculum)));
+  for(const s of needed) if(!covered.has(s)) warnings.push({code:"HC7",msg:`Kein Lehrer für "${s}" → wird als unbesetzt geplant`});
+  for(const t of teachers){
+    const slots=Object.values(t.availability).flat().length;
+    if(slots<t.deputat) errors.push({code:"HC8",msg:`${t.name}: nur ${slots} Slots, ${t.deputat}h Deputat`});
+  }
+  if(!classes.length) errors.push({code:"HC0",msg:"Mindestens eine Klasse nötig"});
+  if(!teachers.length) errors.push({code:"HC0",msg:"Mindestens eine Lehrkraft nötig"});
+  return {errors,warnings,valid:errors.length===0};
+}
+
+// ─── UI Atoms ───────────────────────────────────────────────────────────────
+
+function Tag({text,color,onRemove}){
+  return <span style={{display:"inline-flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:4,fontSize:11,fontWeight:700,background:color+"22",color,border:`1px solid ${color}44`,fontFamily:"'JetBrains Mono',monospace"}}>
+    {text}{onRemove&&<button onClick={onRemove} style={{background:"none",border:"none",color,cursor:"pointer",fontSize:12,lineHeight:1,padding:0}}>×</button>}
+  </span>;
+}
+
+function Inp({value,onChange,placeholder,style={}}){
+  return <input value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+    style={{background:"#0d111a",border:"1px solid #2a3a50",borderRadius:7,padding:"8px 12px",color:"#d0dae8",fontSize:13,width:"100%",...style}}
+    onFocus={e=>e.target.style.borderColor="#4a9eff"} onBlur={e=>e.target.style.borderColor="#2a3a50"}/>;
+}
+
+function Btn({children,onClick,variant="primary",small,disabled,style={}}){
+  const v={primary:{background:"linear-gradient(135deg,#f5c842,#f5a020)",color:"#0d0d0d"},secondary:{background:"#1e2533",color:"#8899aa"},danger:{background:"#2a0e0e",color:"#ff6b4a"}}[variant];
+  return <button onClick={onClick} disabled={disabled} style={{...v,border:"none",borderRadius:8,cursor:disabled?"not-allowed":"pointer",padding:small?"5px 12px":"9px 18px",fontSize:small?12:13,fontWeight:700,opacity:disabled?0.4:1,fontFamily:"inherit",...style}}>{children}</button>;
+}
+
+function Modal({title,onClose,children,width=560}){
+  return <div style={{position:"fixed",inset:0,background:"#000a",zIndex:200,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+    <div style={{background:"#111827",borderRadius:14,border:"1px solid #2a3a50",width:"100%",maxWidth:width,maxHeight:"90vh",overflow:"auto",animation:"fadeIn 0.18s ease",boxShadow:"0 24px 80px #00000088"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"18px 22px",borderBottom:"1px solid #1e2533"}}>
+        <span style={{fontSize:16,fontWeight:800,color:"#f0f6ff"}}>{title}</span>
+        <button onClick={onClose} style={{background:"none",border:"none",color:"#4a6080",cursor:"pointer",fontSize:20}}>×</button>
+      </div>
+      <div style={{padding:"22px"}}>{children}</div>
+    </div>
+  </div>;
+}
+
+function AvailGrid({availability,onChange}){
+  const toggle=(day,h)=>{const c=availability[day]||[];onChange({...availability,[day]:c.includes(h)?c.filter(x=>x!==h):[...c,h].sort((a,b)=>a-b)});};
+  const toggleDay=d=>{const c=availability[d]||[];onChange({...availability,[d]:c.length===8?[]:Array.from({length:8},(_,i)=>i+1)});};
+  return <div>
+    <div style={{display:"grid",gridTemplateColumns:"60px repeat(5,1fr)",gap:3,marginBottom:6}}>
+      <div/>
+      {DAYS_SHORT.map(d=><button key={d} onClick={()=>toggleDay(d)} style={{background:"#1e2533",border:"none",borderRadius:5,padding:"5px 4px",color:"#f5c842",fontSize:11,fontWeight:700,cursor:"pointer"}}>{d}</button>)}
+    </div>
+    {HOURS_FROM_SLOTS(DEFAULT_SLOTS).map((h,hi)=><div key={h} style={{display:"grid",gridTemplateColumns:"60px repeat(5,1fr)",gap:3,marginBottom:3}}>
+      <div style={{fontSize:10,color:"#a0b4c8",display:"flex",alignItems:"center",fontFamily:"monospace",paddingLeft:4}}>{HOUR_LABELS[hi]||hi+1+"."} {h}</div>
+      {DAYS_SHORT.map(d=>{const active=(availability[d]||[]).includes(hi+1);return <button key={d} onClick={()=>toggle(d,hi+1)} style={{height:22,borderRadius:4,border:`1px solid ${active?"#4a9eff66":"#1e2533"}`,cursor:"pointer",background:active?"#4a9eff33":"#0d111a"}}/>;  })}
+    </div>)}
+    <div style={{fontSize:11,color:"#a0b4c8",marginTop:8}}>{Object.values(availability).flat().length} Slots. Tagesnamen für ganzen Tag.</div>
+  </div>;
+}
+
+function TeacherModal({teacher,onSave,onClose}){
+  const isNew=!teacher;
+  const [data,setData]=useState(teacher||{id:"t"+Date.now(),name:"",subjects:[],deputat:24,availability:{Mo:[1,2,3,4,5,6,7,8],Di:[1,2,3,4,5,6,7,8],Mi:[1,2,3,4,5,6,7,8],Do:[1,2,3,4,5,6,7,8],Fr:[1,2,3,4,5,6,7,8]}});
+  const [si,setSi]=useState("");
+  const [customSubject,setCustomSubject]=useState("");
+  const set=(k,v)=>setData(p=>({...p,[k]:v}));
+  const valid=data.name.trim().length>0&&data.subjects.length>0&&data.deputat>0;
+  const slots=Object.values(data.availability).flat().length;
+  return <Modal title={isNew?"Neue Lehrkraft":""+teacher.name+" bearbeiten"} onClose={onClose} width={620}>
+    <div style={{display:"flex",flexDirection:"column",gap:18}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 140px",gap:12}}>
+        <div><label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Name</label><Inp value={data.name} onChange={v=>set("name",v)} placeholder="z.B. Fr. Müller"/></div>
+        <div><label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Deputat (h/W)</label>
+          <input type="number" min={1} max={40} value={data.deputat} onChange={e=>set("deputat",parseInt(e.target.value)||0)} style={{background:"#0d111a",border:"1px solid #2a3a50",borderRadius:7,padding:"8px 12px",color:"#d0dae8",fontSize:13,width:"100%"}}/>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+        <div>
+          <label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Klassenstufen</label>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {[5,6,7,8,9,10,11,12,13].map(g=>{const active=(data.grades||[]).includes(g);return <button key={g} onClick={()=>set("grades",active?(data.grades||[]).filter(x=>x!==g):[...(data.grades||[]),g].sort((a,b)=>a-b))} style={{padding:"3px 10px",borderRadius:6,border:`1px solid ${active?"#4a9eff":"#2a3a50"}`,background:active?"#4a9eff22":"transparent",color:active?"#4a9eff":"#8899aa",cursor:"pointer",fontSize:12,fontWeight:700}}>{g}</button>;})}
+          </div>
+          <div style={{fontSize:10,color:"#4a6080",marginTop:4}}>Leer = alle Stufen</div>
+        </div>
+        <div>
+          <label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Max. Freistunden am Stück</label>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <button onClick={()=>set("maxGap",Math.max(0,(data.maxGap||2)-1))} style={{width:28,height:28,borderRadius:6,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:14,fontWeight:700}}>−</button>
+            <span style={{fontSize:16,fontFamily:"monospace",color:"#ff9f4a",fontWeight:800,width:30,textAlign:"center"}}>{data.maxGap!==undefined?data.maxGap:2}</span>
+            <button onClick={()=>set("maxGap",(data.maxGap||2)+1)} style={{width:28,height:28,borderRadius:6,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:14,fontWeight:700}}>+</button>
+          </div>
+          <div style={{fontSize:10,color:"#4a6080",marginTop:4}}>Freistunden zwischen Einsatzblöcken</div>
+        </div>
+      </div>
+      <div>
+        <label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Fächer</label>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+          {data.subjects.map(s=><Tag key={s} text={s} color={SUBJECT_COLORS[s]||"#8899aa"} onRemove={()=>set("subjects",data.subjects.filter(x=>x!==s))}/>)}
+          {!data.subjects.length&&<span style={{fontSize:12,color:"#a0b4c8"}}>Noch keine Fächer</span>}
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <select value={si} onChange={e=>setSi(e.target.value)} style={{flex:1,background:"#0d111a",border:"1px solid #2a3a50",borderRadius:7,padding:"8px 12px",color:"#d0dae8",fontSize:13}}>
+            <option value="">— Fach auswählen —</option>
+            {ALL_SUBJECTS.filter(s=>!data.subjects.includes(s)).map(s=><option key={s}>{s}</option>)}
+          </select>
+          <Btn onClick={()=>{if(si&&!data.subjects.includes(si))set("subjects",[...data.subjects,si]);setSi("");}} disabled={!si} small>+ Hinzufügen</Btn>
+        </div>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <Inp value={customSubject||""} onChange={v=>setCustomSubject(v)} placeholder="✏ Eigenes Fach eingeben…" style={{flex:1}}/>
+          <Btn onClick={()=>{const v=(customSubject||"").trim();if(v&&!data.subjects.includes(v)){set("subjects",[...data.subjects,v]);}setCustomSubject("");}} disabled={!(customSubject||"").trim()} small>+ Eigenes</Btn>
+        </div>
+      </div>
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em"}}>Verfügbarkeit</label>
+          <span style={{fontSize:11,color:slots>=data.deputat?"#4aff9e":"#ff6b4a",fontFamily:"monospace",fontWeight:700}}>{slots} Slots {slots>=data.deputat?"≥":"<"} {data.deputat}h</span>
+        </div>
+        <div style={{background:"#0d111a",borderRadius:8,padding:14,border:"1px solid #1e2533"}}><AvailGrid availability={data.availability} onChange={v=>set("availability",v)}/></div>
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:10,borderTop:"1px solid #1e2533",paddingTop:16}}>
+        <Btn onClick={onClose} variant="secondary">Abbrechen</Btn>
+        <Btn onClick={()=>valid&&onSave(data)} disabled={!valid}>{isNew?"Anlegen":"Speichern"}</Btn>
+      </div>
+    </div>
+  </Modal>;
+}
+
+function ClassModal({cls,onSave,onClose}){
+  const isNew=!cls;
+  const [data,setData]=useState(cls||{id:"k"+Date.now(),name:"",curriculum:{}});
+  const [si,setSi]=useState("");
+  const [customSubject,setCustomSubject]=useState("");
+  const set=(k,v)=>setData(p=>({...p,[k]:v}));
+  const setCurr=(s,h)=>setData(p=>({...p,curriculum:{...p.curriculum,[s]:h}}));
+  const delCurr=s=>{const c={...data.curriculum};delete c[s];setData(p=>({...p,curriculum:c}));};
+  const total=Object.values(data.curriculum).reduce((a,b)=>a+b,0);
+  const valid=data.name.trim().length>0&&total>0;
+  return <Modal title={isNew?"Neue Klasse":`Klasse ${cls.name} bearbeiten`} onClose={onClose}>
+    <div style={{display:"flex",flexDirection:"column",gap:18}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 180px",gap:12}}>
+        <div><label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Klassenname</label><Inp value={data.name} onChange={v=>set("name",v)} placeholder="z.B. 6b, 10c ..."/></div>
+        <div><label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.08em"}}>Unterricht ab Stunde</label>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <button onClick={()=>set("startHour",Math.max(1,(data.startHour||1)-1))} style={{width:28,height:36,borderRadius:6,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:14,fontWeight:700}}>−</button>
+            <span style={{flex:1,textAlign:"center",fontSize:18,fontFamily:"monospace",color:"#f5c842",fontWeight:800}}>{data.startHour||1}.</span>
+            <button onClick={()=>set("startHour",Math.min(8,(data.startHour||1)+1))} style={{width:28,height:36,borderRadius:6,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:14,fontWeight:700}}>+</button>
+          </div>
+          <div style={{fontSize:10,color:"#4a6080",marginTop:4,textAlign:"center"}}>Standard: 1. Stunde</div>
+        </div>
+      </div>
+      <div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <label style={{fontSize:11,color:"#a0b4c8",fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em"}}>Stundentafel</label>
+          <span style={{fontSize:11,fontFamily:"monospace",color:"#f5c842",fontWeight:700}}>{total} Std/W</span>
+        </div>
+        {Object.entries(data.curriculum).map(([s,h])=>{const col=SUBJECT_COLORS[s]||"#8899aa";const maxDay=(data.maxPerDay||{})[s]||Math.min(h,2);return <div key={s} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,background:"#0d111a",borderRadius:8,padding:"6px 10px"}}>
+          <div style={{width:6,height:6,borderRadius:2,background:col,flexShrink:0}}/>
+          <span style={{width:100,fontSize:12,color:"#d0dae8",fontWeight:600,flexShrink:0}}>{s}</span>
+          <div style={{display:"flex",alignItems:"center",gap:4}}>
+            <span style={{fontSize:10,color:"#4a6080",marginRight:2}}>Std/W:</span>
+            <button onClick={()=>h>1&&setCurr(s,h-1)} style={{width:22,height:22,borderRadius:4,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:12,fontWeight:700}}>−</button>
+            <span style={{width:20,textAlign:"center",fontSize:13,fontFamily:"monospace",color:col,fontWeight:800}}>{h}</span>
+            <button onClick={()=>setCurr(s,h+1)} style={{width:22,height:22,borderRadius:4,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:12,fontWeight:700}}>+</button>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:8}}>
+            <span style={{fontSize:10,color:"#f5c842",marginRight:2}}>Max/Tag:</span>
+            <button onClick={()=>maxDay>1&&setData(p=>({...p,maxPerDay:{...(p.maxPerDay||{}),[s]:maxDay-1}}))} style={{width:22,height:22,borderRadius:4,background:"#1e2533",border:"none",color:"#f5c842",cursor:"pointer",fontSize:12,fontWeight:700}}>−</button>
+            <span style={{width:20,textAlign:"center",fontSize:13,fontFamily:"monospace",color:"#f5c842",fontWeight:800}}>{maxDay}</span>
+            <button onClick={()=>maxDay<h&&setData(p=>({...p,maxPerDay:{...(p.maxPerDay||{}),[s]:maxDay+1}}))} style={{width:22,height:22,borderRadius:4,background:"#1e2533",border:"none",color:"#f5c842",cursor:"pointer",fontSize:12,fontWeight:700}}>+</button>
+          </div>
+          <button onClick={()=>delCurr(s)} style={{background:"none",border:"none",color:"#4a3030",cursor:"pointer",fontSize:14,padding:"0 4px",marginLeft:"auto"}} onMouseEnter={e=>e.target.style.color="#ff4a4a"} onMouseLeave={e=>e.target.style.color="#4a3030"}>×</button>
+        </div>;})}
+        <div style={{display:"flex",gap:8,marginTop:10}}>
+          <select value={si} onChange={e=>setSi(e.target.value)} style={{flex:1,background:"#0d111a",border:"1px solid #2a3a50",borderRadius:7,padding:"7px 10px",color:"#d0dae8",fontSize:13}}>
+            <option value="">— Fach auswählen —</option>
+            {ALL_SUBJECTS.filter(s=>!(s in data.curriculum)).map(s=><option key={s}>{s}</option>)}
+          </select>
+          <Btn onClick={()=>{if(si&&!(si in data.curriculum))setCurr(si,2);setSi("");}} disabled={!si} small>+ Hinzufügen</Btn>
+        </div>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <Inp value={customSubject||""} onChange={v=>setCustomSubject(v)} placeholder="✏ Eigenes Fach eingeben…" style={{flex:1}}/>
+          <Btn onClick={()=>{const v=(customSubject||"").trim();if(v&&!(v in data.curriculum)){setCurr(v,2);}setCustomSubject("");}} disabled={!(customSubject||"").trim()} small>+ Eigenes</Btn>
+        </div>
+      </div>
+      <div style={{background:"#0d111a",borderRadius:8,padding:"10px 14px",border:"1px solid #f5c84233",fontSize:12,color:"#8899aa",lineHeight:1.5,marginBottom:4}}>
+        <span style={{color:"#f5c842",fontWeight:700}}>ℹ Zweiwöchentlicher Unterricht: </span>Trage Fächer, die nur jede zweite Woche stattfinden, mit 0,5 Stunden (statt 1) ein. Sie werden dann automatisch in jeder zweiten Woche eingeplant.
+      </div>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:10,borderTop:"1px solid #1e2533",paddingTop:16}}>
+        <Btn onClick={onClose} variant="secondary">Abbrechen</Btn>
+        <Btn onClick={()=>valid&&onSave(data)} disabled={!valid}>{isNew?"Anlegen":"Speichern"}</Btn>
+      </div>
+    </div>
+  </Modal>;
+}
+
+
+// ─── Times Tab ──────────────────────────────────────────────────────────────
+
+function TimesTab({slots, setSlots}) {
+  const { useState: useS } = React;
+  const [slotDuration, setSlotDuration] = useS(45);
+  const lessons = slots.filter(s=>s.type==="lesson");
+
+  const toMin = t => { const [h,m]=t.split(":").map(Number); return h*60+m; };
+  const toTime = m => `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+
+  // Core recalc: from slot[0].start, chain through all slots
+  // lessons get duration, breaks keep their current length (manually editable)
+  const recalcChain = (slotsIn, dur) => {
+    let cursor = toMin(slotsIn[0].start);
+    return slotsIn.map(s => {
+      const start = toTime(cursor);
+      const len = s.type==="lesson" ? dur : toMin(s.end)-toMin(s.start);
+      const breakLen = s.type==="break" ? Math.max(5, toMin(s.end)-toMin(s.start)) : 0;
+      const end = toTime(cursor + (s.type==="lesson" ? dur : breakLen));
+      cursor += (s.type==="lesson" ? dur : breakLen);
+      return {...s, start, end};
+    });
+  };
+
+  const applyRecalc = () => {
+    const updated = recalcChain(slots, slotDuration);
+    let li=1;
+    const renumbered = updated.map(s=>s.type==="lesson"?{...s,label:(li++)+"."}:s);
+    setSlots(renumbered); saveSlots(renumbered);
+  };
+
+  const updateBreakLen = (idx, mins) => {
+    const newSlots = [...slots];
+    const s = newSlots[idx];
+    const startMin = toMin(s.start);
+    newSlots[idx] = {...s, end: toTime(Math.max(startMin+5, startMin+mins))};
+    setSlots(newSlots); saveSlots(newSlots);
+  };
+
+  const updateFirstStart = (val) => {
+    const newSlots = [...slots];
+    newSlots[0] = {...newSlots[0], start: val};
+    setSlots(newSlots); saveSlots(newSlots);
+  };
+
+  const addBreak = () => {
+    const last = slots[slots.length-1];
+    const startMin = toMin(last.end);
+    const newSlots = [...slots,
+      {label:"P", start:toTime(startMin), end:toTime(startMin+15), type:"break"}
+    ];
+    setSlots(newSlots); saveSlots(newSlots);
+  };
+
+  const addLesson = () => {
+    const last = slots[slots.length-1];
+    const startMin = toMin(last.end);
+    const n = lessons.length+1;
+    const newSlots = [...slots,
+      {label:n+".", start:toTime(startMin), end:toTime(startMin+slotDuration), type:"lesson"}
+    ];
+    setSlots(newSlots); saveSlots(newSlots);
+  };
+
+  const removeSlot = (idx) => {
+    const n = slots.filter((_,i)=>i!==idx);
+    let li=1;
+    const renumbered = n.map(s=>s.type==="lesson"?{...s,label:(li++)+"."}:s);
+    setSlots(renumbered); saveSlots(renumbered);
+  };
+
+  const reset = () => { setSlots(DEFAULT_SLOTS); saveSlots(DEFAULT_SLOTS); setSlotDuration(45); };
+
+  return <div style={{animation:"fadeIn 0.2s ease"}}>
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+      <div>
+        <h2 style={{fontSize:20,fontWeight:800,color:"#f0f6ff"}}>Zeitraster</h2>
+        <p style={{fontSize:12,color:"#a0b4c8",marginTop:2}}>{lessons.length} Unterrichtsstunden · Pausen manuell einstellbar</p>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <Btn onClick={reset} variant="secondary" small>↺ Zurücksetzen</Btn>
+        <Btn onClick={addBreak} variant="secondary" small>+ Pause</Btn>
+        <Btn onClick={addLesson} variant="secondary" small>+ Stunde</Btn>
+        <Btn onClick={applyRecalc}>⟳ Zeitraster aktualisieren</Btn>
+      </div>
+    </div>
+
+    <div style={{background:"#111827",borderRadius:10,border:"1px solid #1e2533",padding:"14px 18px",marginBottom:18,maxWidth:560,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontSize:12,color:"#a0b4c8",fontWeight:700}}>Unterrichtsbeginn:</span>
+        <input value={slots[0]?.start||"07:45"} onChange={e=>updateFirstStart(e.target.value)}
+          style={{width:70,background:"#0d111a",border:"1px solid #2a3a50",borderRadius:6,padding:"5px 8px",color:"#f5c842",fontSize:13,fontFamily:"monospace",textAlign:"center",fontWeight:700}}/>
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontSize:12,color:"#a0b4c8",fontWeight:700}}>Stundendauer:</span>
+        <button onClick={()=>setSlotDuration(d=>Math.max(30,d-5))} style={{width:26,height:26,borderRadius:5,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:12,fontWeight:700}}>−</button>
+        <span style={{fontSize:15,fontFamily:"monospace",color:"#f5c842",fontWeight:800,width:38,textAlign:"center"}}>{slotDuration}'</span>
+        <button onClick={()=>setSlotDuration(d=>Math.min(90,d+5))} style={{width:26,height:26,borderRadius:5,background:"#1e2533",border:"none",color:"#d0dae8",cursor:"pointer",fontSize:12,fontWeight:700}}>+</button>
+      </div>
+      <span style={{fontSize:11,color:"#4a6080"}}>→ dann „Zeitraster aktualisieren" klicken</span>
+    </div>
+
+    <div style={{maxWidth:560}}>
+      {slots.map((slot, idx) => {
+        const isLesson = slot.type==="lesson";
+        const [sh,sm]=slot.start.split(":").map(Number);
+        const [eh,em]=slot.end.split(":").map(Number);
+        const mins=(eh*60+em)-(sh*60+sm);
+        return <div key={idx} style={{display:"flex",alignItems:"center",gap:10,marginBottom:6,background:isLesson?"#111827":"#0a1018",borderRadius:8,border:`1px solid ${isLesson?"#1e2533":"#0e1a28"}`,padding:"8px 14px"}}>
+          <div style={{width:28,fontSize:12,fontFamily:"monospace",fontWeight:700,color:isLesson?"#f5c842":"#4a9eff",textAlign:"center"}}>{slot.label}</div>
+          <div style={{fontSize:11,color:isLesson?"#4a6080":"#4a9eff",width:36}}>{isLesson?"Std":"Pause"}</div>
+          <span style={{fontSize:13,fontFamily:"monospace",color:"#d0dae8",width:48}}>{slot.start}</span>
+          <span style={{fontSize:11,color:"#4a6080"}}>→</span>
+          <span style={{fontSize:13,fontFamily:"monospace",color:"#d0dae8",width:48}}>{slot.end}</span>
+          <span style={{fontSize:11,fontFamily:"monospace",color:isLesson?"#8899aa":"#4a9eff",width:46}}>{mins>0?mins+" min":""}</span>
+          {!isLesson && <div style={{display:"flex",alignItems:"center",gap:4,marginLeft:4}}>
+            <button onClick={()=>updateBreakLen(idx,mins-5)} style={{width:20,height:20,borderRadius:4,background:"#1e2533",border:"none",color:"#4a9eff",cursor:"pointer",fontSize:11,fontWeight:700}}>−</button>
+            <span style={{fontSize:10,color:"#4a6080"}}>Pause</span>
+            <button onClick={()=>updateBreakLen(idx,mins+5)} style={{width:20,height:20,borderRadius:4,background:"#1e2533",border:"none",color:"#4a9eff",cursor:"pointer",fontSize:11,fontWeight:700}}>+</button>
+          </div>}
+          {isLesson && <div style={{width:80}}/>}
+          <button onClick={()=>removeSlot(idx)} style={{background:"none",border:"none",color:"#2a3040",cursor:"pointer",fontSize:14,padding:"0 4px",marginLeft:"auto"}}
+            onMouseEnter={e=>e.target.style.color="#ff4a4a"} onMouseLeave={e=>e.target.style.color="#2a3040"}>×</button>
+        </div>;
+      })}
+    </div>
+    <div style={{marginTop:12,fontSize:11,color:"#4a6080",maxWidth:560}}>
+      💡 Pausenlänge mit − / + anpassen, dann <strong style={{color:"#f5c842"}}>„Zeitraster aktualisieren"</strong> klicken – alle Start- und Endzeiten werden automatisch neu berechnet.
+    </div>
+  </div>;
+}
+
+
+function exportCSV(schedule, classes, slots) {
+  const HOURS = HOURS_FROM_SLOTS(slots || DEFAULT_SLOTS);
+  const DAYS  = ["Montag","Dienstag","Mittwoch","Donnerstag","Freitag"];
+  
+  // One sheet per class: rows = time slots, cols = days
+  let csv = "";
+  for (const cls of classes) {
+    csv += `Klasse: ${cls.name}\n`;
+    csv += "Std;Uhrzeit;" + DAYS.join(";") + "\n";
+    
+    const lesson_slots = (slots||DEFAULT_SLOTS).filter(s=>s.type==="lesson");
+    lesson_slots.forEach((slot, hi) => {
+      const row = [slot.label, `${slot.start}-${slot.end}`];
+      for (const day of DAYS) {
+        const entry = (schedule||[]).find(e=>e.class===cls.name&&e.day===day&&e.time===slot.start);
+        row.push(entry ? `${entry.subject} (${entry.teacher})` : "");
+      }
+      csv += row.join(";") + "\n";
+    });
+    csv += "\n";
+  }
+  
+  // Also add teacher views
+  csv += "\n=== LEHRERSICHT ===\n";
+  const teachers = [...new Set((schedule||[]).map(e=>e.teacher))].sort();
+  for (const teacher of teachers) {
+    csv += `\nLehrkraft: ${teacher}\n`;
+    csv += "Std;Uhrzeit;" + DAYS.join(";") + "\n";
+    const lesson_slots = (slots||DEFAULT_SLOTS).filter(s=>s.type==="lesson");
+    lesson_slots.forEach((slot, hi) => {
+      const row = [slot.label, `${slot.start}-${slot.end}`];
+      for (const day of DAYS) {
+        const entry = (schedule||[]).find(e=>e.teacher===teacher&&e.day===day&&e.time===slot.start);
+        row.push(entry ? `${entry.subject} ${entry.class}` : "");
+      }
+      csv += row.join(";") + "\n";
+    });
+  }
+  
+  const blob = new Blob(["﻿"+csv], {type:"text/csv;charset=utf-8"});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = "stundenplan.csv";
+  a.click(); URL.revokeObjectURL(url);
+}
+
+function TeachersTab({teachers,setTeachers}){
+  const [modal,setModal]=useState(null);
+  const [del,setDel]=useState(null);
+  const save=t=>{const n=modal==="new"?[...teachers,t]:teachers.map(x=>x.id===t.id?t:x);setTeachers(n);saveTeachers(n);setModal(null);};
+  const doDelete=id=>{const n=teachers.filter(t=>t.id!==id);setTeachers(n);saveTeachers(n);setDel(null);};
+  return <div style={{animation:"fadeIn 0.2s ease"}}>
+    {modal&&<TeacherModal teacher={modal==="new"?null:modal} onSave={save} onClose={()=>setModal(null)}/>}
+    {del&&<Modal title="Lehrkraft löschen?" onClose={()=>setDel(null)} width={400}>
+      <p style={{color:"#8899aa",fontSize:13,marginBottom:20}}>„{del.name}" unwiderruflich löschen?</p>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:10}}><Btn onClick={()=>setDel(null)} variant="secondary">Abbrechen</Btn><Btn onClick={()=>doDelete(del.id)} variant="danger">Löschen</Btn></div>
+    </Modal>}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+      <div><h2 style={{fontSize:20,fontWeight:800,color:"#f0f6ff"}}>Lehrkräfte</h2><p style={{fontSize:12,color:"#a0b4c8",marginTop:2}}>{teachers.length} Lehrkräfte · Klicke zum Bearbeiten</p></div>
+      <Btn onClick={()=>setModal("new")}>+ Neue Lehrkraft</Btn>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(340px,1fr))",gap:14}}>
+      {teachers.map(t=>{const slots=Object.values(t.availability).flat().length,ok=slots>=t.deputat;return <div key={t.id} className="card" style={{padding:18,cursor:"pointer"}} onClick={()=>setModal(t)} onMouseEnter={e=>e.currentTarget.style.borderColor="#2a4a70"} onMouseLeave={e=>e.currentTarget.style.borderColor="#1e2533"}>
+        <div style={{display:"flex",gap:12,alignItems:"flex-start"}}>
+          <div style={{width:40,height:40,borderRadius:"50%",background:"#1e3a5f",border:"2px solid #4a9eff33",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:800,color:"#4a9eff",flexShrink:0}}>{t.name.replace(/[^A-ZÜÄÖ]/g,"").slice(0,2)}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:700,color:"#f0f6ff",marginBottom:4}}>{t.name}</div>
+            <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>{t.subjects.map(s=><Tag key={s} text={s} color={SUBJECT_COLORS[s]||"#8899aa"}/>)}</div>
+            <div style={{display:"flex",gap:12}}><span style={{fontSize:11,fontFamily:"monospace",color:"#a0b4c8"}}>{t.deputat}h/W</span><span style={{fontSize:11,fontFamily:"monospace",color:ok?"#4aff9e":"#ff6b4a",fontWeight:700}}>{slots} Slots {ok?"✓":"⚠"}</span></div>
+          </div>
+          <button onClick={e=>{e.stopPropagation();setDel(t);}} style={{background:"none",border:"none",color:"#2a3040",cursor:"pointer",fontSize:16,padding:4}} onMouseEnter={e=>e.target.style.color="#ff4a4a"} onMouseLeave={e=>e.target.style.color="#2a3040"}>⛌</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:2,marginTop:10}}>
+          {DAYS_SHORT.map(d=>{const a=(t.availability[d]||[]).length;return <div key={d} style={{textAlign:"center"}}><div style={{fontSize:9,color:"#a0b4c8",marginBottom:2}}>{d}</div><div style={{height:6,borderRadius:2,background:a===0?"#1a2030":`rgba(74,158,255,${a/8})`}}/></div>;})}
+        </div>
+      </div>;})}
+      <div onClick={()=>setModal("new")} style={{border:"1px dashed #2a3a50",borderRadius:12,padding:18,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,minHeight:120}} onMouseEnter={e=>{e.currentTarget.style.borderColor="#4a9eff";e.currentTarget.style.background="#111827";}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#2a3a50";e.currentTarget.style.background="transparent";}}>
+        <span style={{fontSize:28,color:"#2a3a50"}}>+</span><span style={{fontSize:12,color:"#a0b4c8",fontWeight:600}}>Lehrkraft hinzufügen</span>
+      </div>
+    </div>
+  </div>;
+}
+
+function ClassesTab({classes,setClasses}){
+  const [modal,setModal]=useState(null);
+  const [del,setDel]=useState(null);
+  const [dragIdx,setDragIdx]=useState(null);
+  const [dragOver,setDragOver]=useState(null);
+  const save=c=>{const n=modal==="new"?[...classes,c]:classes.map(x=>x.id===c.id?c:x);setClasses(n);saveClasses(n);setModal(null);};
+  const doDelete=id=>{const n=classes.filter(c=>c.id!==id);setClasses(n);saveClasses(n);setDel(null);};
+  const onDragStart=(e,i)=>{setDragIdx(i);e.dataTransfer.effectAllowed="move";};
+  const onDragOver=(e,i)=>{e.preventDefault();setDragOver(i);};
+  const onDrop=(e,i)=>{e.preventDefault();if(dragIdx===null||dragIdx===i){setDragIdx(null);setDragOver(null);return;}const n=[...classes];const [item]=n.splice(dragIdx,1);n.splice(i,0,item);setClasses(n);saveClasses(n);setDragIdx(null);setDragOver(null);};
+  return <div style={{animation:"fadeIn 0.2s ease"}}>
+    {modal&&<ClassModal cls={modal==="new"?null:modal} onSave={save} onClose={()=>setModal(null)}/>}
+    {del&&<Modal title="Klasse löschen?" onClose={()=>setDel(null)} width={400}>
+      <p style={{color:"#8899aa",fontSize:13,marginBottom:20}}>Klasse „{del.name}" löschen?</p>
+      <div style={{display:"flex",justifyContent:"flex-end",gap:10}}><Btn onClick={()=>setDel(null)} variant="secondary">Abbrechen</Btn><Btn onClick={()=>doDelete(del.id)} variant="danger">Löschen</Btn></div>
+    </Modal>}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+      <div><h2 style={{fontSize:20,fontWeight:800,color:"#f0f6ff"}}>Klassen & Stundentafeln</h2><p style={{fontSize:12,color:"#a0b4c8",marginTop:2}}>{classes.length} Klassen · Klicke zum Bearbeiten</p></div>
+      <Btn onClick={()=>setModal("new")}>+ Neue Klasse</Btn>
+    </div>
+    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
+      {classes.map((c,ci)=>{const total=Object.values(c.curriculum).reduce((a,b)=>a+b,0);return <div key={c.id} draggable className="card" style={{padding:20,cursor:"grab",opacity:dragIdx===ci?0.5:1,outline:dragOver===ci?"2px solid #f5c842":"none",transition:"opacity 0.15s"}} onClick={()=>setModal(c)} onDragStart={e=>onDragStart(e,ci)} onDragOver={e=>onDragOver(e,ci)} onDrop={e=>onDrop(e,ci)} onDragEnd={()=>{setDragIdx(null);setDragOver(null);}} onMouseEnter={e=>e.currentTarget.style.borderColor="#2a4a70"} onMouseLeave={e=>e.currentTarget.style.borderColor=dragOver===ci?"#f5c842":"#1e2533"}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+          <div><div style={{fontSize:26,fontWeight:800,color:"#f5c842",fontFamily:"monospace"}}>{c.name}</div><div style={{fontSize:11,color:"#a0b4c8",fontFamily:"monospace"}}>{total} Std/Woche</div></div>
+          <div style={{display:"flex",gap:4}}>
+            <button onClick={e=>{e.stopPropagation();const copy={...c,id:"k"+Date.now(),name:c.name+" (Kopie)"};const n=[...classes,copy];setClasses(n);saveClasses(n);}} style={{background:"none",border:"none",color:"#8899aa",cursor:"pointer",fontSize:14,padding:"0 4px"}} title="Klasse kopieren" onMouseEnter={e=>e.target.style.color="#4aff9e"} onMouseLeave={e=>e.target.style.color="#8899aa"}>⧉</button>
+            <button onClick={e=>{e.stopPropagation();setDel(c);}} style={{background:"none",border:"none",color:"#8899aa",cursor:"pointer",fontSize:16,padding:"0 4px"}} onMouseEnter={e=>e.target.style.color="#ff4a4a"} onMouseLeave={e=>e.target.style.color="#8899aa"}>⛌</button>
+          </div>
+        </div>
+        {Object.entries(c.curriculum).map(([s,h])=>{const col=SUBJECT_COLORS[s]||"#8899aa";return <div key={s} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+          <div style={{width:72,fontSize:11,color:col,fontWeight:600,flexShrink:0}}>{s}</div>
+          <div style={{flex:1,height:5,background:"#1a2030",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(h/5,1)*100}%`,background:col,borderRadius:3,opacity:0.8}}/></div>
+          <div style={{width:18,fontSize:11,color:"#a0b4c8",fontFamily:"monospace",textAlign:"right"}}>{h}×</div>
+        </div>;})}
+      </div>;})}
+      <div onClick={()=>setModal("new")} style={{border:"1px dashed #2a3a50",borderRadius:12,padding:18,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:8,minHeight:120}} onMouseEnter={e=>{e.currentTarget.style.borderColor="#f5c842";e.currentTarget.style.background="#111827";}} onMouseLeave={e=>{e.currentTarget.style.borderColor="#2a3a50";e.currentTarget.style.background="transparent";}}>
+        <span style={{fontSize:28,color:"#2a3a50"}}>+</span><span style={{fontSize:12,color:"#a0b4c8",fontWeight:600}}>Klasse hinzufügen</span>
+      </div>
+    </div>
+  </div>;
+}
+
+function ScheduleTab({schedule,lockedSlots,onToggleLock,classes,teachers,slots}){
+  const HOURS=HOURS_FROM_SLOTS(slots||DEFAULT_SLOTS);
+  const [filter,setFilter]=useState({type:"class",key:classes[0]?.name||""});
+  const grid=HOURS.map(()=>DAYS_FULL.map(()=>null));
+  for(const e of (schedule||[])){
+    const di=DAYS_FULL.indexOf(e.day),hi=HOURS.indexOf(e.time);
+    if(di<0||hi<0)continue;
+    const show=filter.type==="class"?e.class===filter.key:e.teacher===filter.key;
+    if(show)grid[hi][di]=e;
+  }
+  if(!schedule)return <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",minHeight:300,gap:12,color:"#a0b4c8",animation:"fadeIn 0.2s ease"}}>
+    <div style={{fontSize:40}}>📅</div>
+    <div style={{fontSize:15,fontWeight:600,color:"#d0dae8"}}>Noch kein Stundenplan vorhanden</div>
+    <div style={{fontSize:13}}>Klicke oben auf „Stundenplan generieren"</div>
+  </div>;
+  return <div style={{animation:"fadeIn 0.2s ease"}}>
+    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:16,flexWrap:"wrap"}}>
+      <span style={{fontSize:12,color:"#a0b4c8"}}>Klasse:</span>
+      {classes.map(c=><button key={c.name} onClick={()=>setFilter({type:"class",key:c.name})} style={{padding:"4px 12px",borderRadius:16,border:"none",cursor:"pointer",fontSize:12,fontWeight:700,background:filter.type==="class"&&filter.key===c.name?"#f5c842":"#1e2533",color:filter.type==="class"&&filter.key===c.name?"#0d0d0d":"#c0cce0"}}>{c.name}</button>)}
+      <span style={{fontSize:12,color:"#a0b4c8",marginLeft:8}}>Lehrer:</span>
+      {teachers.map(t=><button key={t.name} onClick={()=>setFilter({type:"teacher",key:t.name})} style={{padding:"4px 12px",borderRadius:16,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,background:filter.type==="teacher"&&filter.key===t.name?"#4a9eff":"#1e2533",color:filter.type==="teacher"&&filter.key===t.name?"#0d0d0d":"#c0cce0"}}>{t.name.replace("Fr. ","").replace("Hr. ","")}</button>)}
+    </div>
+    {lockedSlots.size>0&&<div style={{background:"#1a1400",border:"1px solid #f5c84233",borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:"#f5c842"}}>🔒 {lockedSlots.size} gesperrte Slots – bleiben beim nächsten Generieren erhalten</div>}
+    {filter.type==="teacher"&&schedule&&<div style={{background:"#111827",border:"1px solid #1e2533",borderRadius:8,padding:"8px 14px",marginBottom:12,fontSize:12,color:"#a0b4c8",display:"flex",gap:16,alignItems:"center"}}>
+      <span>👤 <strong style={{color:"#f0f6ff"}}>{filter.key}</strong></span>
+      {(()=>{const t=teachers.find(t=>t.name===filter.key);const planned=schedule.filter(e=>e.teacher===filter.key).length;const deputat=t?.deputat||"?";const ok=planned<=deputat;return <span>Geplante Stunden: <strong style={{color:ok?"#4aff9e":"#ff6b4a",fontFamily:"monospace"}}>{planned}</strong><span style={{color:"#8899aa"}}> / {deputat} Deputat</span>{!ok&&<span style={{color:"#ff6b4a",fontSize:10,marginLeft:4}}>⚠ überschritten</span>}</span>;})()}
+      <span style={{color:"#4a6080"}}>· Klassen: <strong style={{color:"#f5c842"}}>{[...new Set(schedule.filter(e=>e.teacher===filter.key).map(e=>e.class))].join(", ")}</strong></span>
+    </div>}
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+      <div style={{fontSize:11,color:"#a0b4c8"}}>💡 Slot anklicken zum Sperren / Entsperren</div>
+      <button onClick={()=>{
+        const printArea = document.getElementById('sp-schedule-table');
+        if(!printArea) return;
+        const w = window.open('','_blank');
+        w.document.write('<html><head><title>Stundenplan</title><style>');
+        w.document.write('body{font-family:Arial,sans-serif;font-size:11px;margin:1cm;}');
+        w.document.write('table{border-collapse:collapse;width:100%;}');
+        w.document.write('th,td{border:1px solid #ccc;padding:4px 6px;text-align:left;}');
+        w.document.write('th{background:#f0f0f0;font-weight:bold;}');
+        w.document.write('.subj{font-weight:bold;}');
+        w.document.write('@page{size:A4 landscape;margin:1cm}');
+        w.document.write('</style></head><body>');
+        w.document.write(printArea.outerHTML);
+        w.document.write('</body></html>');
+        w.document.close();
+        w.focus();
+        setTimeout(()=>{w.print();w.close();},300);
+      }} style={{background:"linear-gradient(135deg,#f5c842,#f5a020)",border:"none",borderRadius:8,padding:"6px 16px",fontSize:12,fontWeight:700,cursor:"pointer",color:"#0d0d0d"}}>🖨 Als PDF drucken</button>
+      <button onClick={()=>exportCSV(schedule,classes,slots)} style={{background:"linear-gradient(135deg,#f5c842,#f5a020)",border:"none",borderRadius:8,padding:"6px 16px",fontSize:12,fontWeight:700,cursor:"pointer",color:"#0d0d0d"}}>⬇ CSV Export</button>
+    </div>
+    {filter.type==="class"&&schedule&&(()=>{
+      const cls=classes.find(c=>c.name===filter.key);
+      if(!cls)return null;
+      const planned={};
+      const unassignedBySubject={};
+      schedule.filter(e=>e.class===filter.key).forEach(e=>{
+        planned[e.subject]=(planned[e.subject]||0)+1;
+        if(e.teacher==="kann nicht besetzt werden") unassignedBySubject[e.subject]=(unassignedBySubject[e.subject]||0)+1;
+      });
+      // done = planned minus unassigned (actually taught)
+      const missing=Object.entries(cls.curriculum||{}).filter(([s,h])=>{
+        const realDone=(planned[s]||0)-(unassignedBySubject[s]||0);
+        return realDone<h;
+      }).map(([s,h])=>{
+        const realDone=(planned[s]||0)-(unassignedBySubject[s]||0);
+        return {subject:s,needed:h,done:realDone,missing:h-realDone};
+      });
+      const unassigned=schedule.filter(e=>e.class===filter.key&&e.teacher==="kann nicht besetzt werden");
+      if(missing.length===0&&unassigned.length===0)return null;
+      return <div style={{marginTop:16,background:"#111827",border:"1px solid #1e2533",borderRadius:12,padding:20,maxWidth:400}}>
+        <div style={{fontSize:18,fontWeight:800,color:"#ff8080",marginBottom:4}}>⚠ Unbesetzte Stunden</div>
+        <div style={{fontSize:12,color:"#a0b4c8",marginBottom:14}}>{unassigned.length} Stunden konnten nicht besetzt werden</div>
+        {missing.map(({subject,needed,done,missing:m})=>{const col=SUBJECT_COLORS[subject]||"#ff4a4a";return <div key={subject} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+          <div style={{width:80,fontSize:12,color:col,fontWeight:600,flexShrink:0}}>{subject}</div>
+          <div style={{flex:1,height:6,background:"#1a2030",borderRadius:3,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${(done/needed)*100}%`,background:col,borderRadius:3,opacity:0.8}}/>
+          </div>
+          <span style={{fontSize:11,fontFamily:"monospace",color:"#ff8080",width:36,textAlign:"right"}}>{done}/{needed}</span>
+          <span style={{fontSize:11,color:"#ff6b4a",fontWeight:700,width:32}}>−{m}×</span>
+        </div>;})}
+      </div>;
+    })()}
+    <div className="card" style={{overflow:"hidden"}}>
+      <div style={{overflowX:"auto"}}>
+        <table id='sp-schedule-table' style={{borderCollapse:"collapse",width:"100%"}}>
+          <thead><tr>
+            <th style={{padding:"8px 12px",color:"#a0b4c8",fontSize:11,fontFamily:"monospace",borderBottom:"1px solid #1e2533",textAlign:"left",width:66,background:"#0d111a"}}>Std</th>
+            {DAYS_FULL.map(d=><th key={d} style={{padding:"8px 12px",color:"#f5c842",fontSize:12,fontWeight:700,letterSpacing:"0.07em",borderBottom:"2px solid #f5c84233",textAlign:"left",minWidth:120}}>{d}</th>)}
+          </tr></thead>
+          <tbody>{HOURS.map((h,hi)=><tr key={h}>
+            <td style={{padding:"0 12px",background:"#0a0e18",borderBottom:"1px solid #1a2030",whiteSpace:"nowrap"}}>
+              <div style={{fontSize:12,fontWeight:700,color:"#d0dae8",fontFamily:"monospace"}}>{HOUR_LABELS[hi]}</div>
+              <div style={{fontSize:10,color:"#a0b4c8"}}>{h}</div>
+            </td>
+            {grid[hi].map((entry,di)=>{
+              const lk=entry?`${entry.day}|${entry.time}|${entry.class}`:null;
+              const locked=lk&&lockedSlots.has(lk);
+              const col=entry?(SUBJECT_COLORS[entry.subject]||"#8899aa"):null;
+              return <td key={di} className="slot-cell" onClick={()=>entry&&onToggleLock(lk)} style={{border:"1px solid #1e2533",padding:0,height:56,cursor:entry?"pointer":"default",background:!entry?"#0d111a":locked?"#1a1400":col+"12",position:"relative",transition:"background 0.15s"}}>
+                {locked&&<div style={{position:"absolute",inset:0,border:"2px solid #f5c842",borderRadius:1,pointerEvents:"none",zIndex:2}}/>}
+                {entry&&<>
+                  <div style={{position:"absolute",left:0,top:0,bottom:0,width:3,background:col}}/>
+                  <div style={{padding:"6px 8px 6px 10px"}}>
+                    <div style={{display:"flex",justifyContent:"space-between"}}>
+                      <span style={{fontSize:12,fontWeight:700,color:col}}>{entry.subject}</span>
+                      <span className="lock-hint" style={{opacity:locked?1:0,fontSize:11,color:locked?"#f5c842":"#a0b4c8",transition:"opacity 0.15s"}}>{locked?"🔒":"🔓"}</span>
+                    </div>
+                    <div style={{fontSize:10,color:"#c0cce0",marginTop:1}}>{filter.type==="teacher"?entry.class:entry.teacher}</div>
+                  </div>
+                </>}
+              </td>;
+            })}
+          </tr>)}</tbody>
+        </table>
+      </div>
+    </div>
+  </div>;
+}
+
+function App(){
+  const init=loadState();
+  const [slots,setSlots]=useState(init.slots);
+  const [teachers,setTeachers]=useState(init.teachers);
+  const [classes,setClasses]=useState(init.classes);
+  const [schedule,setSchedule]=useState(init.schedule);
+  const [locked,setLocked]=useState(init.locked);
+  const [tab,setTab]=useState("teachers");
+  const [generating,setGenerating]=useState(false);
+  const [genStatus,setGenStatus]=useState("");
+  const [error,setError]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [showWarnings,setShowWarnings]=useState(false);
+  const validation=runValidation(teachers,classes);
+
+  const showToast=(msg,type="success")=>{setToast({msg,type});setTimeout(()=>setToast(null),3500);};
+  const toggleLock=useCallback(key=>{setLocked(prev=>{const n=new Set(prev);n.has(key)?n.delete(key):n.add(key);saveLocked(n);return n;});}, []);
+
+  async function generate(){
+    if(!classes.length||!teachers.length){showToast("Mindestens eine Klasse und eine Lehrkraft nötig!","error");return;}
+    setGenerating(true);setError(null);
+    const lockedEntries=(schedule||[]).filter(e=>locked.has(`${e.day}|${e.time}|${e.class}`));
+    let allEntries=[...lockedEntries];
+    try{
+      for(let i=0;i<classes.length;i++){
+        const cls=classes[i];
+        setGenStatus(`Klasse ${cls.name} (${i+1}/${classes.length})…`);
+        const hours=HOURS_FROM_SLOTS(slots);
+        const resp=await fetch(`${BACKEND_URL}/api/generate-class`,{
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({cls,teachers,existing_schedule:allEntries,locked_entries:lockedEntries,hours,max_per_day:cls.maxPerDay||{},block_subjects:true,no_free_periods:true,start_hour:cls.startHour||1})
+        });
+        if(!resp.ok){const err=await resp.json().catch(()=>({detail:"Unbekannter Fehler"}));throw new Error(`Klasse ${cls.name}: ${err.detail||"Backend-Fehler"}`);}
+        const data=await resp.json();
+        allEntries=[...allEntries,...data.entries];
+      }
+      setSchedule(allEntries);saveSchedule(allEntries);
+      setTab("schedule");showToast(`Plan generiert: ${allEntries.length} Einträge`);
+    }catch(e){setError("Fehler: "+e.message);showToast(e.message,"error");}
+    finally{setGenerating(false);setGenStatus("");}
+  }
+
+  const navItems=[
+    {key:"times",label:"Zeiten",count:slots.filter(s=>s.type==="lesson").length,color:"#ff9f4a"},
+    {key:"teachers",label:"Lehrkräfte",count:teachers.length,color:"#4a9eff"},
+    {key:"classes",label:"Klassen",count:classes.length,color:"#f5c842"},
+    {key:"schedule",label:"Stundenplan",count:schedule?schedule.length:null,color:"#4aff9e"},
+  ];
+
+  return <div style={{minHeight:"100vh",background:"#0a0e18",fontFamily:"'Outfit','Segoe UI',sans-serif",color:"#d0dae8"}}>
+    {toast&&<div style={{position:"fixed",bottom:24,right:24,zIndex:300,background:toast.type==="error"?"#2a0e0e":"#0e2a1a",border:`1px solid ${toast.type==="error"?"#ff4a4a44":"#4aff9e44"}`,borderRadius:10,padding:"12px 18px",fontSize:13,fontWeight:600,color:toast.type==="error"?"#ff8080":"#4aff9e",boxShadow:"0 8px 32px #00000066",animation:"fadeIn 0.2s ease"}}>
+      {toast.type==="error"?"⚠ ":"✓ "}{toast.msg}
+    </div>}
+    <header style={{borderBottom:"1px solid #1e2533",padding:"0 28px",height:56,display:"flex",alignItems:"center",gap:20,background:"#0d111a",position:"sticky",top:0,zIndex:100}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+        <svg width="24" height="24" viewBox="0 0 24 24"><rect x="1" y="1" width="10" height="10" rx="2" fill="#f5c842"/><rect x="13" y="1" width="10" height="10" rx="2" fill="#4a9eff" opacity="0.7"/><rect x="1" y="13" width="10" height="10" rx="2" fill="#4a9eff" opacity="0.7"/><rect x="13" y="13" width="10" height="10" rx="2" fill="#f5c842" opacity="0.3"/></svg>
+        <span style={{fontSize:16,fontWeight:800,color:"#f0f6ff",letterSpacing:"-0.02em"}}>StundenPlaner</span>
+      </div>
+      <nav style={{display:"flex",gap:2,flex:1}}>
+        {navItems.map(n=><button key={n.key} onClick={()=>setTab(n.key)} style={{background:"none",border:"none",cursor:"pointer",padding:"6px 14px",fontSize:13,fontWeight:600,color:tab===n.key?n.color:"#c0cce0",borderBottom:tab===n.key?`2px solid ${n.color}`:"2px solid transparent",display:"flex",alignItems:"center",gap:6}}>
+          {n.label}
+          {n.count!==null&&<span style={{fontSize:10,background:"#1e2533",padding:"1px 6px",borderRadius:10,color:tab===n.key?n.color:"#a0b0c0",fontFamily:"monospace",fontWeight:700}}>{n.count}</span>}
+        </button>)}
+      </nav>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        {validation.errors.length>0&&<div style={{fontSize:11,color:"#ff8080",background:"#2a0e0e",padding:"4px 10px",borderRadius:6,border:"1px solid #ff4a4a33",cursor:"pointer"}} title={validation.errors.map(e=>e.msg).join('\n')}>⚠ {validation.errors.length} Fehler</div>}
+        {validation.errors.length===0&&validation.warnings.length>0&&<div style={{position:"relative"}}>
+          <div onClick={()=>setShowWarnings(p=>!p)} style={{fontSize:11,color:"#f5c842",background:"#1a1400",padding:"4px 10px",borderRadius:6,border:"1px solid #f5c84233",cursor:"pointer",userSelect:"none"}}>ℹ {validation.warnings.length} Hinweise {showWarnings?"▲":"▼"}</div>
+          {showWarnings&&<div style={{position:"absolute",top:"calc(100% + 6px)",right:0,background:"#111827",border:"1px solid #f5c84233",borderRadius:8,padding:12,minWidth:280,zIndex:150,boxShadow:"0 8px 24px #00000088"}}>
+            {validation.warnings.map((w,i)=><div key={i} style={{fontSize:12,color:"#f5c842",padding:"4px 0",borderBottom:"1px solid #1e2533"}}>{w.msg}</div>)}
+          </div>}
+        </div>}
+        {locked.size>0&&<div style={{fontSize:11,color:"#f5c842",fontFamily:"monospace",fontWeight:700}}>🔒 {locked.size}</div>}
+        <button onClick={generate} disabled={generating} style={{background:generating?"#1e2533":"linear-gradient(135deg,#f5c842,#f5a020)",border:"none",borderRadius:9,padding:"8px 18px",fontSize:13,fontWeight:800,cursor:generating?"not-allowed":"pointer",color:generating?"#4a6080":"#0d0d0d",display:"flex",alignItems:"center",gap:8,boxShadow:generating?"none":"0 4px 16px #f5c84233",fontFamily:"inherit"}}>
+          {generating?<><span style={{display:"inline-block",animation:"spin 0.8s linear infinite"}}>⟳</span> {genStatus||"Generiere…"}</>:"▶ Stundenplan generieren"}
+        </button>
+      </div>
+    </header>
+    {error&&<div style={{background:"#2a0e0e",borderBottom:"1px solid #ff4a4a33",padding:"10px 28px",color:"#ff8080",fontSize:12}}>⚠ {error}</div>}
+    {generating&&<div style={{position:"relative",height:3,background:"#1e2533"}}>
+      <div style={{position:"absolute",top:0,left:0,height:"100%",background:"linear-gradient(90deg,#f5c842,#4aff9e)",animation:"progress 2s ease-in-out infinite",borderRadius:2}}/>
+      <style>{`@keyframes progress{0%{width:0%;left:0}50%{width:60%;left:20%}100%{width:0%;left:100%}}`}</style>
+    </div>}
+    {generating&&<div style={{background:"#0d111a",borderBottom:"1px solid #1e2533",padding:"8px 28px",fontSize:12,color:"#a0b4c8",display:"flex",alignItems:"center",gap:10}}>
+      <span style={{display:"inline-block",animation:"spin 0.8s linear infinite",color:"#f5c842"}}>⟳</span>
+      <span>{genStatus||"Generiere Stundenplan…"}</span>
+      <span style={{color:"#4a6080",fontSize:11}}>· Das dauert ca. {classes.length * 10}–{classes.length * 20} Sekunden</span>
+    </div>}
+    <main style={{padding:"24px 28px",maxWidth:1400,margin:"0 auto"}}>
+      {tab==="teachers"&&<TeachersTab teachers={teachers} setTeachers={t=>{setTeachers(t);saveTeachers(t);}}/>}
+      {tab==="classes"&&<ClassesTab classes={classes} setClasses={c=>{setClasses(c);saveClasses(c);}}/>}
+      {tab==="times"&&<TimesTab slots={slots} setSlots={setSlots}/>}
+      {tab==="schedule"&&<ScheduleTab schedule={schedule} lockedSlots={locked} onToggleLock={toggleLock} classes={classes} teachers={teachers} slots={slots}/>}
+    </main>
+  </div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
